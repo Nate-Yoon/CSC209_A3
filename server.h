@@ -6,19 +6,47 @@
  *
  * Purpose:
  * Public server-facing declarations for the CSC209 A3 project.
- * This header will eventually describe the stable server-side interfaces and
- * shared state structures needed by the rest of the program.
+ * This header describes the stable server-side state used by the authoritative
+ * process that owns the listening socket, client table, and select()-driven
+ * event loop.
  *
  * Current scope:
- * Skeleton only. No public server interface is locked in yet.
- *
- * Likely future helpers, not finalized:
- * - server state/client table structs
- * - lobby status enums
- * - top-level server startup/run entry points
+ * Listener setup, connection management, line-buffered socket reads, and
+ * lobby-first event loop infrastructure only. JOIN/READY semantics beyond
+ * basic message dispatch remain intentionally unimplemented.
  */
+
+#include <stdbool.h>
+#include <stddef.h>
 
 #include "game.h"
 #include "protocol.h"
+
+typedef enum {
+    SERVER_PHASE_LOBBY = 0,
+    SERVER_PHASE_RUNNING
+} server_phase_t;
+
+typedef struct {
+    int fd;
+    bool active;
+    bool joined;
+    bool ready;
+    int player_id;
+    char username[PROTOCOL_MAX_USERNAME_LEN + 1];
+    char input_buffer[PROTOCOL_LINE_BUFFER_SIZE];
+    size_t input_len;
+} server_client_t;
+
+typedef struct {
+    int listen_fd;
+    int next_player_id;
+    int active_clients;
+    server_phase_t phase;
+    server_client_t clients[PROTOCOL_MAX_PLAYERS];
+} server_state_t;
+
+void server_state_init(server_state_t *server);
+int server_run(const char *port_text);
 
 #endif
