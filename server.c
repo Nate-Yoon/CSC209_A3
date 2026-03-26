@@ -589,6 +589,9 @@ static int server_send_to_client(const server_client_t *client, const char *mess
                             message_len - total_sent,
                             0);
         if (sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
             return -1;
         }
 
