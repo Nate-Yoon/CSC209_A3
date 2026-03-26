@@ -12,6 +12,8 @@
  * recognizing JOIN and READY lines and routing them to TODO hooks.
  */
 
+#define _POSIX_C_SOURCE 200112L
+
 #include "server.h"
 
 #include <errno.h>
@@ -53,6 +55,19 @@ static int server_handle_join_line(server_state_t *server,
 static int server_handle_ready_line(server_state_t *server,
                                     size_t client_index,
                                     const char *line);
+static int server_send_to_client(const server_client_t *client, const char *message);
+static int server_send_error_and_close(server_state_t *server,
+                                       size_t client_index,
+                                       const char *reason);
+static int server_broadcast_message(const server_state_t *server,
+                                    const char *message);
+static int server_broadcast_info(const server_state_t *server, const char *text);
+static bool server_username_is_unique(const server_state_t *server,
+                                      const char *username);
+static int server_count_joined_clients(const server_state_t *server);
+static int server_count_ready_clients(const server_state_t *server);
+static void server_broadcast_lobby_status(const server_state_t *server);
+static void server_try_start_game(server_state_t *server);
 static void server_print_usage(const char *program_name);
 
 void server_state_init(server_state_t *server) {
@@ -242,6 +257,7 @@ static void server_shutdown(server_state_t *server) {
 static void server_accept_client(server_state_t *server) {
     ssize_t free_slot;
     int client_fd;
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
 
     client_fd = accept(server->listen_fd, NULL, NULL);
     if (client_fd < 0) {
@@ -249,10 +265,20 @@ static void server_accept_client(server_state_t *server) {
         return;
     }
 
+    if (server->phase != SERVER_PHASE_LOBBY) {
+        protocol_format_error(message, sizeof(message), "game already started");
+        send(client_fd, message, strlen(message), 0);
+        close(client_fd);
+        fprintf(stderr, "server: rejected connection because game already started\n");
+        return;
+    }
+
     free_slot = server_find_free_slot(server);
     if (free_slot < 0) {
-        fprintf(stderr, "server: rejecting connection because lobby is full\n");
+        protocol_format_error(message, sizeof(message), "lobby is full");
+        send(client_fd, message, strlen(message), 0);
         close(client_fd);
+        fprintf(stderr, "server: rejecting connection because lobby is full\n");
         return;
     }
 
@@ -383,8 +409,9 @@ static int server_handle_client_line(server_state_t *server,
         return server_handle_ready_line(server, client_index, line);
     }
 
-    fprintf(stderr,
-            "server: TODO unsupported lobby message from slot %zu: %s",
+    server_send_to_client(&server->clients[client_index],
+                          PROTOCOL_MSG_ERROR "|unsupported message\n");
+    fprintf(stderr, "server: unsupported lobby message from slot %zu: %s",
             client_index, line);
     return 0;
 }
@@ -392,21 +419,232 @@ static int server_handle_client_line(server_state_t *server,
 static int server_handle_join_line(server_state_t *server,
                                    size_t client_index,
                                    const char *line) {
-    (void)server;
+    server_client_t *client;
+    char username[PROTOCOL_MAX_USERNAME_LEN + 1];
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
 
-    fprintf(stderr, "server: TODO JOIN handler for slot %zu: %s",
-            client_index, line);
+    client = &server->clients[client_index];
+
+    if (server->phase != SERVER_PHASE_LOBBY) {
+        return server_send_error_and_close(server, client_index,
+                                           "game already started");
+    }
+
+    if (client->joined) {
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|already joined\n");
+        return 0;
+    }
+
+    if (!protocol_parse_join_username(line, username, sizeof(username))) {
+        return server_send_error_and_close(server, client_index,
+                                           "invalid JOIN format");
+    }
+
+    if (!protocol_username_is_valid(username)) {
+        return server_send_error_and_close(server, client_index,
+                                           "invalid username");
+    }
+
+    if (!server_username_is_unique(server, username)) {
+        return server_send_error_and_close(server, client_index,
+                                           "username already in use");
+    }
+
+    client->joined = true;
+    client->ready = false;
+    client->player_id = server->next_player_id;
+    server->next_player_id++;
+    strcpy(client->username, username);
+
+    protocol_format_welcome(message, sizeof(message), client->player_id);
+    server_send_to_client(client, message);
+
+    snprintf(message, sizeof(message),
+             "%s joined the lobby (%d/%d players)",
+             client->username,
+             server_count_joined_clients(server),
+             PROTOCOL_MAX_PLAYERS);
+    server_broadcast_info(server, message);
+
+    fprintf(stderr, "server: slot %zu joined as %s (player_id=%d)\n",
+            client_index, client->username, client->player_id);
+    server_broadcast_lobby_status(server);
     return 0;
 }
 
 static int server_handle_ready_line(server_state_t *server,
                                     size_t client_index,
                                     const char *line) {
-    (void)server;
+    server_client_t *client;
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
 
-    fprintf(stderr, "server: TODO READY handler for slot %zu: %s",
-            client_index, line);
+    (void)line;
+
+    client = &server->clients[client_index];
+
+    if (!client->joined) {
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
+        return 0;
+    }
+
+    if (server->phase != SERVER_PHASE_LOBBY) {
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|game already started\n");
+        return 0;
+    }
+
+    if (client->ready) {
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|already ready\n");
+        return 0;
+    }
+
+    client->ready = true;
+    snprintf(message, sizeof(message), "%s is ready", client->username);
+    server_broadcast_info(server, message);
+    server_broadcast_lobby_status(server);
+    server_try_start_game(server);
+
+    fprintf(stderr, "server: slot %zu marked ready (%s)\n",
+            client_index, client->username);
     return 0;
+}
+
+static int server_send_to_client(const server_client_t *client, const char *message) {
+    size_t total_sent;
+    size_t message_len;
+
+    if (client == NULL || message == NULL || client->fd < 0) {
+        return -1;
+    }
+
+    message_len = strlen(message);
+    total_sent = 0;
+    while (total_sent < message_len) {
+        ssize_t sent = send(client->fd,
+                            message + total_sent,
+                            message_len - total_sent,
+                            0);
+        if (sent < 0) {
+            return -1;
+        }
+
+        total_sent += (size_t)sent;
+    }
+
+    return 0;
+}
+
+static int server_send_error_and_close(server_state_t *server,
+                                       size_t client_index,
+                                       const char *reason) {
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
+
+    if (protocol_format_error(message, sizeof(message), reason) >= 0) {
+        server_send_to_client(&server->clients[client_index], message);
+    }
+
+    server_remove_client(server, client_index, reason);
+    return -1;
+}
+
+static int server_broadcast_message(const server_state_t *server,
+                                    const char *message) {
+    size_t i;
+
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (!server->clients[i].active || !server->clients[i].joined) {
+            continue;
+        }
+
+        if (server_send_to_client(&server->clients[i], message) != 0) {
+            fprintf(stderr, "server: failed sending broadcast to slot %zu\n", i);
+        }
+    }
+
+    return 0;
+}
+
+static int server_broadcast_info(const server_state_t *server, const char *text) {
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
+
+    if (protocol_format_info(message, sizeof(message), text) < 0) {
+        return -1;
+    }
+
+    return server_broadcast_message(server, message);
+}
+
+static bool server_username_is_unique(const server_state_t *server,
+                                      const char *username) {
+    size_t i;
+
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (!server->clients[i].active || !server->clients[i].joined) {
+            continue;
+        }
+
+        if (strcmp(server->clients[i].username, username) == 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static int server_count_joined_clients(const server_state_t *server) {
+    int joined_clients;
+    size_t i;
+
+    joined_clients = 0;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (server->clients[i].active && server->clients[i].joined) {
+            joined_clients++;
+        }
+    }
+
+    return joined_clients;
+}
+
+static int server_count_ready_clients(const server_state_t *server) {
+    int ready_clients;
+    size_t i;
+
+    ready_clients = 0;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (server->clients[i].active &&
+            server->clients[i].joined &&
+            server->clients[i].ready) {
+            ready_clients++;
+        }
+    }
+
+    return ready_clients;
+}
+
+static void server_broadcast_lobby_status(const server_state_t *server) {
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
+
+    snprintf(message, sizeof(message),
+             "lobby status: %d joined, %d ready, need at least %d ready to start",
+             server_count_joined_clients(server),
+             server_count_ready_clients(server),
+             PROTOCOL_MIN_PLAYERS);
+    server_broadcast_info(server, message);
+}
+
+static void server_try_start_game(server_state_t *server) {
+    int joined_clients;
+    int ready_clients;
+
+    joined_clients = server_count_joined_clients(server);
+    ready_clients = server_count_ready_clients(server);
+
+    if (joined_clients < PROTOCOL_MIN_PLAYERS || ready_clients != joined_clients) {
+        return;
+    }
+
+    server->phase = SERVER_PHASE_RUNNING;
+    server_broadcast_info(server, "all players ready, game starting");
+    fprintf(stderr, "server: game starting with %d players\n", joined_clients);
 }
 
 static void server_print_usage(const char *program_name) {
