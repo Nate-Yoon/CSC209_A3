@@ -43,6 +43,7 @@ typedef struct {
     int next_player_id;
     int active_clients;
     server_phase_t phase;
+    game_state_t game;
     server_client_t clients[PROTOCOL_MAX_PLAYERS];
 } server_state_t;
 
