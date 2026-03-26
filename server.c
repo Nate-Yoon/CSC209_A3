@@ -68,6 +68,9 @@ static int server_count_joined_clients(const server_state_t *server);
 static int server_count_ready_clients(const server_state_t *server);
 static void server_broadcast_lobby_status(const server_state_t *server);
 static void server_try_start_game(server_state_t *server);
+static int server_collect_joined_players(const server_state_t *server,
+                                         int *player_ids,
+                                         char usernames[][PROTOCOL_MAX_USERNAME_LEN + 1]);
 static void server_print_usage(const char *program_name);
 
 void server_state_init(server_state_t *server) {
@@ -81,6 +84,7 @@ void server_state_init(server_state_t *server) {
     server->next_player_id = 1;
     server->active_clients = 0;
     server->phase = SERVER_PHASE_LOBBY;
+    game_state_init(&server->game);
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         server->clients[i].fd = -1;
@@ -634,6 +638,9 @@ static void server_broadcast_lobby_status(const server_state_t *server) {
 static void server_try_start_game(server_state_t *server) {
     int joined_clients;
     int ready_clients;
+    int player_ids[PROTOCOL_MAX_PLAYERS];
+    char usernames[PROTOCOL_MAX_PLAYERS][PROTOCOL_MAX_USERNAME_LEN + 1];
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
 
     joined_clients = server_count_joined_clients(server);
     ready_clients = server_count_ready_clients(server);
@@ -642,9 +649,44 @@ static void server_try_start_game(server_state_t *server) {
         return;
     }
 
+    if (server_collect_joined_players(server, player_ids, usernames) != joined_clients) {
+        fprintf(stderr, "server: failed to snapshot joined players for game start\n");
+        return;
+    }
+
+    if (!game_start(&server->game, player_ids, usernames, joined_clients)) {
+        fprintf(stderr, "server: game_start rejected %d players\n", joined_clients);
+        return;
+    }
+
     server->phase = SERVER_PHASE_RUNNING;
     server_broadcast_info(server, "all players ready, game starting");
+    snprintf(message, sizeof(message), "%s|%s\n",
+             PROTOCOL_MSG_PROMPT, server->game.current_prompt);
+    server_broadcast_message(server, message);
     fprintf(stderr, "server: game starting with %d players\n", joined_clients);
+}
+
+static int server_collect_joined_players(const server_state_t *server,
+                                         int *player_ids,
+                                         char usernames[][PROTOCOL_MAX_USERNAME_LEN + 1]) {
+    int count;
+    size_t i;
+
+    count = 0;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (!server->clients[i].active || !server->clients[i].joined) {
+            continue;
+        }
+
+        player_ids[count] = server->clients[i].player_id;
+        strncpy(usernames[count], server->clients[i].username,
+                PROTOCOL_MAX_USERNAME_LEN);
+        usernames[count][PROTOCOL_MAX_USERNAME_LEN] = '\0';
+        count++;
+    }
+
+    return count;
 }
 
 static void server_print_usage(const char *program_name) {

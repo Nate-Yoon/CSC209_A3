@@ -27,6 +27,7 @@ enum {
 #define PROTOCOL_MSG_WELCOME "WELCOME"
 #define PROTOCOL_MSG_ERROR "ERROR"
 #define PROTOCOL_MSG_INFO "INFO"
+#define PROTOCOL_MSG_PROMPT "PROMPT"
 
 bool protocol_parse_join_username(const char *line,
                                   char *username_out,
