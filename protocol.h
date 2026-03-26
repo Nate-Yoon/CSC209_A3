@@ -30,6 +30,7 @@ enum {
 #define PROTOCOL_MSG_INFO "INFO"
 #define PROTOCOL_MSG_PROMPT "PROMPT"
 #define PROTOCOL_MSG_RESULT "RESULT"
+#define PROTOCOL_MSG_WINNER "WINNER"
 
 bool protocol_parse_join_username(const char *line,
                                   char *username_out,
@@ -46,5 +47,6 @@ int protocol_format_result(char *buffer,
                            size_t buffer_size,
                            const char *username,
                            const char *submission);
+int protocol_format_winner(char *buffer, size_t buffer_size, const char *username);
 
 #endif

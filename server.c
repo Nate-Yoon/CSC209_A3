@@ -24,6 +24,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #define STRINGIFY_VALUE(x) #x
@@ -75,6 +76,7 @@ static int server_collect_joined_players(const server_state_t *server,
                                          int *player_ids,
                                          char usernames[][PROTOCOL_MAX_USERNAME_LEN + 1]);
 static void server_broadcast_round_results(server_state_t *server);
+static void server_seed_rng_once(void);
 static void server_print_usage(const char *program_name);
 
 void server_state_init(server_state_t *server) {
@@ -84,6 +86,7 @@ void server_state_init(server_state_t *server) {
         return;
     }
 
+    server_seed_rng_once();
     server->listen_fd = -1;
     server->next_player_id = 1;
     server->active_clients = 0;
@@ -750,6 +753,7 @@ static int server_collect_joined_players(const server_state_t *server,
 static void server_broadcast_round_results(server_state_t *server) {
     int i;
     char message[PROTOCOL_LINE_BUFFER_SIZE];
+    char winner[PROTOCOL_MAX_USERNAME_LEN + 1];
 
     server_broadcast_info(server, "all submissions received");
 
@@ -768,7 +772,24 @@ static void server_broadcast_round_results(server_state_t *server) {
     }
 
     server->game.phase = GAME_PHASE_OVER;
+    if (game_pick_random_winner(&server->game, winner, sizeof(winner))) {
+        if (protocol_format_winner(message, sizeof(message), winner) >= 0) {
+            server_broadcast_message(server, message);
+        }
+    }
+
     server_broadcast_info(server, "round over");
+}
+
+static void server_seed_rng_once(void) {
+    static int seeded = 0;
+
+    if (seeded) {
+        return;
+    }
+
+    srand((unsigned)time(NULL) ^ (unsigned)getpid());
+    seeded = 1;
 }
 
 static void server_print_usage(const char *program_name) {

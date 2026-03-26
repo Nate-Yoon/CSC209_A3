@@ -9,6 +9,7 @@
 
 #include "game.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static const char *const GAME_DEFAULT_PROMPT =
@@ -143,6 +144,40 @@ bool game_all_submitted(const game_state_t *game) {
 
 const game_player_t *game_get_player(const game_state_t *game, int player_id) {
     return game_find_player_const(game, player_id);
+}
+
+bool game_pick_random_winner(const game_state_t *game,
+                             char *username_out,
+                             size_t username_out_size) {
+    int eligible_indices[PROTOCOL_MAX_PLAYERS];
+    int eligible_count;
+    int chosen;
+    int i;
+
+    if (game == NULL || username_out == NULL || username_out_size == 0) {
+        return false;
+    }
+
+    eligible_count = 0;
+    for (i = 0; i < game->player_count; i++) {
+        const game_player_t *player = &game->players[i];
+
+        if (!player->active || !player->has_submitted) {
+            continue;
+        }
+
+        eligible_indices[eligible_count] = i;
+        eligible_count++;
+    }
+
+    if (eligible_count == 0) {
+        return false;
+    }
+
+    chosen = eligible_indices[rand() % eligible_count];
+    strncpy(username_out, game->players[chosen].username, username_out_size - 1);
+    username_out[username_out_size - 1] = '\0';
+    return true;
 }
 
 static game_player_t *game_find_player(game_state_t *game, int player_id) {

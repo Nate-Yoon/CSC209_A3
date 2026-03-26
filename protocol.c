@@ -163,3 +163,12 @@ int protocol_format_result(char *buffer,
                     PROTOCOL_MSG_RESULT "|%s|%s\n",
                     username, submission);
 }
+
+int protocol_format_winner(char *buffer, size_t buffer_size, const char *username) {
+    if (buffer == NULL || buffer_size == 0 || username == NULL) {
+        return -1;
+    }
+
+    return snprintf(buffer, buffer_size,
+                    PROTOCOL_MSG_WINNER "|%s\n", username);
+}

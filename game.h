@@ -50,5 +50,8 @@ bool game_start(game_state_t *game,
 bool game_submit(game_state_t *game, int player_id, const char *submission);
 bool game_all_submitted(const game_state_t *game);
 const game_player_t *game_get_player(const game_state_t *game, int player_id);
+bool game_pick_random_winner(const game_state_t *game,
+                             char *username_out,
+                             size_t username_out_size);
 
 #endif
