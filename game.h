@@ -26,7 +26,9 @@ typedef enum {
 typedef struct {
     int player_id;
     char username[PROTOCOL_MAX_USERNAME_LEN + 1];
+    char submission[PROTOCOL_MAX_SUBMISSION_LEN + 1];
     bool active;
+    bool has_submitted;
 } game_player_t;
 
 typedef struct {
@@ -45,5 +47,8 @@ bool game_start(game_state_t *game,
                 const int *player_ids,
                 const char usernames[][PROTOCOL_MAX_USERNAME_LEN + 1],
                 int player_count);
+bool game_submit(game_state_t *game, int player_id, const char *submission);
+bool game_all_submitted(const game_state_t *game);
+const game_player_t *game_get_player(const game_state_t *game, int player_id);
 
 #endif

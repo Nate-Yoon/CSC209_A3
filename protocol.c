@@ -44,6 +44,37 @@ bool protocol_parse_join_username(const char *line,
     return true;
 }
 
+bool protocol_parse_submit_text(const char *line,
+                                char *submission_out,
+                                size_t submission_out_size) {
+    const char *prefix = PROTOCOL_MSG_SUBMIT "|";
+    const char *submission_start;
+    size_t submission_len;
+
+    if (line == NULL || submission_out == NULL || submission_out_size == 0) {
+        return false;
+    }
+
+    if (strncmp(line, prefix, strlen(prefix)) != 0) {
+        return false;
+    }
+
+    submission_start = line + strlen(prefix);
+    submission_len = strcspn(submission_start, "\n");
+
+    if (submission_start[submission_len] != '\n') {
+        return false;
+    }
+
+    if (submission_len == 0 || submission_len >= submission_out_size) {
+        return false;
+    }
+
+    memcpy(submission_out, submission_start, submission_len);
+    submission_out[submission_len] = '\0';
+    return true;
+}
+
 bool protocol_username_is_valid(const char *username) {
     size_t i;
     size_t username_len;
@@ -61,6 +92,30 @@ bool protocol_username_is_valid(const char *username) {
         unsigned char byte = (unsigned char)username[i];
 
         if (!isalnum(byte)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool protocol_submission_is_valid(const char *submission) {
+    size_t i;
+    size_t submission_len;
+
+    if (submission == NULL) {
+        return false;
+    }
+
+    submission_len = strlen(submission);
+    if (submission_len == 0 || submission_len > PROTOCOL_MAX_SUBMISSION_LEN) {
+        return false;
+    }
+
+    for (i = 0; i < submission_len; i++) {
+        unsigned char byte = (unsigned char)submission[i];
+
+        if (byte < 32 || byte > 126 || byte == '|') {
             return false;
         }
     }
@@ -93,4 +148,18 @@ int protocol_format_info(char *buffer, size_t buffer_size, const char *text) {
 
     return snprintf(buffer, buffer_size,
                     PROTOCOL_MSG_INFO "|%s\n", text);
+}
+
+int protocol_format_result(char *buffer,
+                           size_t buffer_size,
+                           const char *username,
+                           const char *submission) {
+    if (buffer == NULL || buffer_size == 0 ||
+        username == NULL || submission == NULL) {
+        return -1;
+    }
+
+    return snprintf(buffer, buffer_size,
+                    PROTOCOL_MSG_RESULT "|%s|%s\n",
+                    username, submission);
 }

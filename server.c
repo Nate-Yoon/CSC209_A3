@@ -55,6 +55,9 @@ static int server_handle_join_line(server_state_t *server,
 static int server_handle_ready_line(server_state_t *server,
                                     size_t client_index,
                                     const char *line);
+static int server_handle_submit_line(server_state_t *server,
+                                     size_t client_index,
+                                     const char *line);
 static int server_send_to_client(const server_client_t *client, const char *message);
 static int server_send_error_and_close(server_state_t *server,
                                        size_t client_index,
@@ -71,6 +74,7 @@ static void server_try_start_game(server_state_t *server);
 static int server_collect_joined_players(const server_state_t *server,
                                          int *player_ids,
                                          char usernames[][PROTOCOL_MAX_USERNAME_LEN + 1]);
+static void server_broadcast_round_results(server_state_t *server);
 static void server_print_usage(const char *program_name);
 
 void server_state_init(server_state_t *server) {
@@ -413,9 +417,13 @@ static int server_handle_client_line(server_state_t *server,
         return server_handle_ready_line(server, client_index, line);
     }
 
+    if (strncmp(line, PROTOCOL_MSG_SUBMIT "|", strlen(PROTOCOL_MSG_SUBMIT) + 1) == 0) {
+        return server_handle_submit_line(server, client_index, line);
+    }
+
     server_send_to_client(&server->clients[client_index],
                           PROTOCOL_MSG_ERROR "|unsupported message\n");
-    fprintf(stderr, "server: unsupported lobby message from slot %zu: %s",
+    fprintf(stderr, "server: unsupported message from slot %zu: %s",
             client_index, line);
     return 0;
 }
@@ -509,6 +517,56 @@ static int server_handle_ready_line(server_state_t *server,
 
     fprintf(stderr, "server: slot %zu marked ready (%s)\n",
             client_index, client->username);
+    return 0;
+}
+
+static int server_handle_submit_line(server_state_t *server,
+                                     size_t client_index,
+                                     const char *line) {
+    server_client_t *client;
+    char submission[PROTOCOL_MAX_SUBMISSION_LEN + 1];
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
+
+    client = &server->clients[client_index];
+
+    if (!client->joined) {
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
+        return 0;
+    }
+
+    if (server->phase != SERVER_PHASE_RUNNING ||
+        server->game.phase != GAME_PHASE_PROMPT) {
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|not accepting submissions\n");
+        return 0;
+    }
+
+    if (!protocol_parse_submit_text(line, submission, sizeof(submission))) {
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid SUBMIT format\n");
+        return 0;
+    }
+
+    if (!protocol_submission_is_valid(submission)) {
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid submission\n");
+        return 0;
+    }
+
+    if (!game_submit(&server->game, client->player_id, submission)) {
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|submission rejected\n");
+        return 0;
+    }
+
+    snprintf(message, sizeof(message), "submission received (%d/%d)",
+             server->game.submitted_count, server->game.player_count);
+    server_send_to_client(client, PROTOCOL_MSG_INFO "|submission received\n");
+    server_broadcast_info(server, message);
+
+    fprintf(stderr, "server: received submission from slot %zu (%s)\n",
+            client_index, client->username);
+
+    if (game_all_submitted(&server->game)) {
+        server_broadcast_round_results(server);
+    }
+
     return 0;
 }
 
@@ -687,6 +745,30 @@ static int server_collect_joined_players(const server_state_t *server,
     }
 
     return count;
+}
+
+static void server_broadcast_round_results(server_state_t *server) {
+    int i;
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
+
+    server_broadcast_info(server, "all submissions received");
+
+    for (i = 0; i < server->game.player_count; i++) {
+        const game_player_t *player = &server->game.players[i];
+
+        if (!player->active || !player->has_submitted) {
+            continue;
+        }
+
+        if (protocol_format_result(message, sizeof(message),
+                                   player->username,
+                                   player->submission) >= 0) {
+            server_broadcast_message(server, message);
+        }
+    }
+
+    server->game.phase = GAME_PHASE_OVER;
+    server_broadcast_info(server, "round over");
 }
 
 static void server_print_usage(const char *program_name) {
