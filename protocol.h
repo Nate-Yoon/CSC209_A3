@@ -22,9 +22,20 @@ enum {
     PROTOCOL_LINE_BUFFER_SIZE = PROTOCOL_MAX_LINE_LEN + 1
 };
 
+typedef enum {
+    PROTOCOL_TYPE_UNKNOWN = 0,
+    PROTOCOL_TYPE_JOIN,
+    PROTOCOL_TYPE_READY,
+    PROTOCOL_TYPE_SUBMIT,
+    PROTOCOL_TYPE_REWRITE,
+    PROTOCOL_TYPE_VOTE
+} protocol_message_type_t;
+
 #define PROTOCOL_MSG_JOIN "JOIN"
 #define PROTOCOL_MSG_READY "READY"
 #define PROTOCOL_MSG_SUBMIT "SUBMIT"
+#define PROTOCOL_MSG_REWRITE "REWRITE"
+#define PROTOCOL_MSG_VOTE "VOTE"
 #define PROTOCOL_MSG_WELCOME "WELCOME"
 #define PROTOCOL_MSG_ERROR "ERROR"
 #define PROTOCOL_MSG_INFO "INFO"
@@ -32,12 +43,17 @@ enum {
 #define PROTOCOL_MSG_RESULT "RESULT"
 #define PROTOCOL_MSG_WINNER "WINNER"
 
+protocol_message_type_t protocol_identify_message(const char *line);
 bool protocol_parse_join_username(const char *line,
                                   char *username_out,
                                   size_t username_out_size);
 bool protocol_parse_submit_text(const char *line,
                                 char *submission_out,
                                 size_t submission_out_size);
+bool protocol_parse_rewrite_text(const char *line,
+                                 char *rewrite_out,
+                                 size_t rewrite_out_size);
+bool protocol_parse_vote_target(const char *line, int *target_id_out);
 bool protocol_username_is_valid(const char *username);
 bool protocol_submission_is_valid(const char *submission);
 int protocol_format_welcome(char *buffer, size_t buffer_size, int player_id);

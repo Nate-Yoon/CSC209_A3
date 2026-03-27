@@ -10,48 +10,77 @@
 #include "protocol.h"
 
 #include <ctype.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+
+static bool protocol_parse_text_with_prefix(const char *line,
+                                            const char *prefix,
+                                            char *text_out,
+                                            size_t text_out_size);
+
+protocol_message_type_t protocol_identify_message(const char *line) {
+    if (line == NULL) {
+        return PROTOCOL_TYPE_UNKNOWN;
+    }
+
+    if (strncmp(line, PROTOCOL_MSG_JOIN "|", strlen(PROTOCOL_MSG_JOIN) + 1) == 0) {
+        return PROTOCOL_TYPE_JOIN;
+    }
+
+    if (strcmp(line, PROTOCOL_MSG_READY "\n") == 0) {
+        return PROTOCOL_TYPE_READY;
+    }
+
+    if (strncmp(line, PROTOCOL_MSG_SUBMIT "|", strlen(PROTOCOL_MSG_SUBMIT) + 1) == 0) {
+        return PROTOCOL_TYPE_SUBMIT;
+    }
+
+    if (strncmp(line, PROTOCOL_MSG_REWRITE "|", strlen(PROTOCOL_MSG_REWRITE) + 1) == 0) {
+        return PROTOCOL_TYPE_REWRITE;
+    }
+
+    if (strncmp(line, PROTOCOL_MSG_VOTE "|", strlen(PROTOCOL_MSG_VOTE) + 1) == 0) {
+        return PROTOCOL_TYPE_VOTE;
+    }
+
+    return PROTOCOL_TYPE_UNKNOWN;
+}
 
 bool protocol_parse_join_username(const char *line,
                                   char *username_out,
                                   size_t username_out_size) {
-    const char *prefix = PROTOCOL_MSG_JOIN "|";
-    const char *username_start;
-    size_t username_len;
-
-    if (line == NULL || username_out == NULL || username_out_size == 0) {
-        return false;
-    }
-
-    if (strncmp(line, prefix, strlen(prefix)) != 0) {
-        return false;
-    }
-
-    username_start = line + strlen(prefix);
-    username_len = strcspn(username_start, "\n");
-
-    if (username_start[username_len] != '\n') {
-        return false;
-    }
-
-    if (username_len == 0 || username_len >= username_out_size) {
-        return false;
-    }
-
-    memcpy(username_out, username_start, username_len);
-    username_out[username_len] = '\0';
-    return true;
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_JOIN "|",
+                                           username_out,
+                                           username_out_size);
 }
 
 bool protocol_parse_submit_text(const char *line,
                                 char *submission_out,
                                 size_t submission_out_size) {
-    const char *prefix = PROTOCOL_MSG_SUBMIT "|";
-    const char *submission_start;
-    size_t submission_len;
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_SUBMIT "|",
+                                           submission_out,
+                                           submission_out_size);
+}
 
-    if (line == NULL || submission_out == NULL || submission_out_size == 0) {
+bool protocol_parse_rewrite_text(const char *line,
+                                 char *rewrite_out,
+                                 size_t rewrite_out_size) {
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_REWRITE "|",
+                                           rewrite_out,
+                                           rewrite_out_size);
+}
+
+bool protocol_parse_vote_target(const char *line, int *target_id_out) {
+    const char *prefix = PROTOCOL_MSG_VOTE "|";
+    const char *number_start;
+    char *endptr;
+    long value;
+
+    if (line == NULL || target_id_out == NULL) {
         return false;
     }
 
@@ -59,19 +88,13 @@ bool protocol_parse_submit_text(const char *line,
         return false;
     }
 
-    submission_start = line + strlen(prefix);
-    submission_len = strcspn(submission_start, "\n");
-
-    if (submission_start[submission_len] != '\n') {
+    number_start = line + strlen(prefix);
+    value = strtol(number_start, &endptr, 10);
+    if (endptr == number_start || strcmp(endptr, "\n") != 0 || value <= 0) {
         return false;
     }
 
-    if (submission_len == 0 || submission_len >= submission_out_size) {
-        return false;
-    }
-
-    memcpy(submission_out, submission_start, submission_len);
-    submission_out[submission_len] = '\0';
+    *target_id_out = (int)value;
     return true;
 }
 
@@ -171,4 +194,35 @@ int protocol_format_winner(char *buffer, size_t buffer_size, const char *usernam
 
     return snprintf(buffer, buffer_size,
                     PROTOCOL_MSG_WINNER "|%s\n", username);
+}
+
+static bool protocol_parse_text_with_prefix(const char *line,
+                                            const char *prefix,
+                                            char *text_out,
+                                            size_t text_out_size) {
+    const char *text_start;
+    size_t text_len;
+
+    if (line == NULL || prefix == NULL || text_out == NULL || text_out_size == 0) {
+        return false;
+    }
+
+    if (strncmp(line, prefix, strlen(prefix)) != 0) {
+        return false;
+    }
+
+    text_start = line + strlen(prefix);
+    text_len = strcspn(text_start, "\n");
+
+    if (text_start[text_len] != '\n') {
+        return false;
+    }
+
+    if (text_len == 0 || text_len >= text_out_size) {
+        return false;
+    }
+
+    memcpy(text_out, text_start, text_len);
+    text_out[text_len] = '\0';
+    return true;
 }
