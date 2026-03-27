@@ -10,7 +10,10 @@
 #include "protocol.h"
 
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -18,6 +21,10 @@ static bool protocol_parse_text_with_prefix(const char *line,
                                             const char *prefix,
                                             char *text_out,
                                             size_t text_out_size);
+static int protocol_checked_snprintf(char *buffer,
+                                     size_t buffer_size,
+                                     const char *format,
+                                     ...);
 
 protocol_message_type_t protocol_identify_message(const char *line) {
     if (line == NULL) {
@@ -89,8 +96,13 @@ bool protocol_parse_vote_target(const char *line, int *target_id_out) {
     }
 
     number_start = line + strlen(prefix);
+    errno = 0;
     value = strtol(number_start, &endptr, 10);
-    if (endptr == number_start || strcmp(endptr, "\n") != 0 || value <= 0) {
+    if (endptr == number_start || strcmp(endptr, "\n") != 0) {
+        return false;
+    }
+
+    if (errno == ERANGE || value <= 0 || value > INT_MAX) {
         return false;
     }
 
@@ -151,8 +163,8 @@ int protocol_format_welcome(char *buffer, size_t buffer_size, int player_id) {
         return -1;
     }
 
-    return snprintf(buffer, buffer_size,
-                    PROTOCOL_MSG_WELCOME "|%d\n", player_id);
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_WELCOME "|%d\n", player_id);
 }
 
 int protocol_format_error(char *buffer, size_t buffer_size, const char *reason) {
@@ -160,8 +172,8 @@ int protocol_format_error(char *buffer, size_t buffer_size, const char *reason) 
         return -1;
     }
 
-    return snprintf(buffer, buffer_size,
-                    PROTOCOL_MSG_ERROR "|%s\n", reason);
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_ERROR "|%s\n", reason);
 }
 
 int protocol_format_info(char *buffer, size_t buffer_size, const char *text) {
@@ -169,8 +181,8 @@ int protocol_format_info(char *buffer, size_t buffer_size, const char *text) {
         return -1;
     }
 
-    return snprintf(buffer, buffer_size,
-                    PROTOCOL_MSG_INFO "|%s\n", text);
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_INFO "|%s\n", text);
 }
 
 int protocol_format_result(char *buffer,
@@ -182,9 +194,9 @@ int protocol_format_result(char *buffer,
         return -1;
     }
 
-    return snprintf(buffer, buffer_size,
-                    PROTOCOL_MSG_RESULT "|%s|%s\n",
-                    username, submission);
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_RESULT "|%s|%s\n",
+                                     username, submission);
 }
 
 int protocol_format_winner(char *buffer, size_t buffer_size, const char *username) {
@@ -192,8 +204,8 @@ int protocol_format_winner(char *buffer, size_t buffer_size, const char *usernam
         return -1;
     }
 
-    return snprintf(buffer, buffer_size,
-                    PROTOCOL_MSG_WINNER "|%s\n", username);
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_WINNER "|%s\n", username);
 }
 
 static bool protocol_parse_text_with_prefix(const char *line,
@@ -225,4 +237,26 @@ static bool protocol_parse_text_with_prefix(const char *line,
     memcpy(text_out, text_start, text_len);
     text_out[text_len] = '\0';
     return true;
+}
+
+static int protocol_checked_snprintf(char *buffer,
+                                     size_t buffer_size,
+                                     const char *format,
+                                     ...) {
+    int written;
+    va_list args;
+
+    if (buffer == NULL || buffer_size == 0 || format == NULL) {
+        return -1;
+    }
+
+    va_start(args, format);
+    written = vsnprintf(buffer, buffer_size, format, args);
+    va_end(args);
+
+    if (written < 0 || (size_t)written >= buffer_size) {
+        return -1;
+    }
+
+    return written;
 }

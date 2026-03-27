@@ -17,6 +17,7 @@
 
 #include <errno.h>
 #include <netdb.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -75,6 +76,7 @@ static int server_broadcast_info(const server_state_t *server, const char *text)
 static void server_broadcast_lobby_status(const server_state_t *server);
 static void server_seed_rng_once(void);
 static void server_print_usage(const char *program_name);
+static void server_ignore_sigpipe(void);
 
 void server_state_init(server_state_t *server) {
     size_t i;
@@ -83,6 +85,7 @@ void server_state_init(server_state_t *server) {
         return;
     }
 
+    server_ignore_sigpipe();
     server_seed_rng_once();
     server->listen_fd = -1;
     server->next_player_id = 1;
@@ -266,8 +269,9 @@ static void server_accept_client(server_state_t *server) {
     }
 
     if (server->game.phase != GAME_PHASE_LOBBY) {
-        protocol_format_error(message, sizeof(message), "game already started");
-        send(client_fd, message, strlen(message), 0);
+        if (protocol_format_error(message, sizeof(message), "game already started") >= 0) {
+            server_send_to_client(&(server_client_t){ .fd = client_fd }, message);
+        }
         close(client_fd);
         fprintf(stderr, "server: rejected connection because game already started\n");
         return;
@@ -275,8 +279,9 @@ static void server_accept_client(server_state_t *server) {
 
     free_slot = server_find_free_slot(server);
     if (free_slot < 0) {
-        protocol_format_error(message, sizeof(message), "lobby is full");
-        send(client_fd, message, strlen(message), 0);
+        if (protocol_format_error(message, sizeof(message), "lobby is full") >= 0) {
+            server_send_to_client(&(server_client_t){ .fd = client_fd }, message);
+        }
         close(client_fd);
         fprintf(stderr, "server: rejecting connection because lobby is full\n");
         return;
@@ -418,8 +423,11 @@ static int server_handle_client_line(server_state_t *server,
         case PROTOCOL_TYPE_SUBMIT:
             return server_handle_submit_line(server, client_index, line);
         default:
-            server_send_to_client(&server->clients[client_index],
-                                  PROTOCOL_MSG_ERROR "|unsupported message\n");
+            if (server_send_to_client(&server->clients[client_index],
+                                      PROTOCOL_MSG_ERROR "|unsupported message\n") != 0) {
+                server_remove_client(server, client_index, "send failure");
+                return -1;
+            }
             fprintf(stderr, "server: unsupported message from slot %zu: %s",
                     client_index, line);
             return 0;
@@ -824,4 +832,8 @@ int main(int argc, char *argv[]) {
     }
 
     return server_run(port_text);
+}
+
+static void server_ignore_sigpipe(void) {
+    signal(SIGPIPE, SIG_IGN);
 }
