@@ -49,6 +49,10 @@ protocol_message_type_t protocol_identify_message(const char *line) {
         return PROTOCOL_TYPE_SUBMIT;
     }
 
+    if (strncmp(line, PROTOCOL_MSG_TITLE "|", strlen(PROTOCOL_MSG_TITLE) + 1) == 0) {
+        return PROTOCOL_TYPE_TITLE;
+    }
+
     if (strncmp(line, PROTOCOL_MSG_REWRITE "|", strlen(PROTOCOL_MSG_REWRITE) + 1) == 0) {
         return PROTOCOL_TYPE_REWRITE;
     }
@@ -105,6 +109,15 @@ bool protocol_parse_submit_text(const char *line,
                                            PROTOCOL_MSG_SUBMIT "|",
                                            submission_out,
                                            submission_out_size);
+}
+
+bool protocol_parse_title_text(const char *line,
+                               char *title_out,
+                               size_t title_out_size) {
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_TITLE "|",
+                                           title_out,
+                                           title_out_size);
 }
 
 bool protocol_parse_rewrite_text(const char *line,
@@ -276,6 +289,15 @@ int protocol_format_prompt(char *buffer, size_t buffer_size, const char *prompt_
 
     return protocol_checked_snprintf(buffer, buffer_size,
                                      PROTOCOL_MSG_PROMPT "|%s\n", prompt_text);
+}
+
+int protocol_format_title(char *buffer, size_t buffer_size, const char *title_text) {
+    if (buffer == NULL || buffer_size == 0 || title_text == NULL) {
+        return -1;
+    }
+
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_TITLE "|%s\n", title_text);
 }
 
 int protocol_format_result(char *buffer,

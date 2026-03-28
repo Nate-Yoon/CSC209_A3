@@ -80,12 +80,14 @@ bool game_advance_phase_if_ready(game_state_t *game);
 bool game_finish_round(game_state_t *game);
 void game_end(game_state_t *game);
 void game_handle_disconnect(game_state_t *game, int player_id);
-time_t game_get_submission_deadline(const game_state_t *game);
-int game_apply_submission_timeout(game_state_t *game, time_t now);
+time_t game_get_phase_deadline(const game_state_t *game);
+int game_apply_phase_timeout(game_state_t *game, time_t now);
 const game_player_t *game_get_player(const game_state_t *game, int player_id);
 const game_player_t *game_get_player_at(const game_state_t *game, size_t player_index);
 const round_state_t *game_get_current_round(const game_state_t *game);
 const char *game_get_player_prompt(const game_state_t *game, int player_id);
+const char *game_get_player_rewrite_prompt(const game_state_t *game, int player_id);
+const char *game_get_player_rewrite_submission(const game_state_t *game, int player_id);
 bool game_pick_round_winner(const game_state_t *game,
                             char *username_out,
                             size_t username_out_size);

@@ -67,6 +67,7 @@ void round_state_reset(round_state_t *round) {
     round->rewrite_count = 0;
     round->vote_count = 0;
     round->submission_deadline = 0;
+    round->rewrite_deadline = 0;
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         round->vote_totals[i] = 0;
@@ -104,6 +105,7 @@ bool round_set_player_active(round_state_t *round, size_t player_index, bool act
     }
 
     player_state->active = false;
+    player_state->rewrite_target_index = ROUND_NO_TARGET;
     if (round->participant_count > 0) {
         round->participant_count--;
     }
@@ -182,6 +184,50 @@ bool round_assign_prompts_from_file(round_state_t *round, const char *file_path)
     return true;
 }
 
+bool round_assign_rewrite_targets(round_state_t *round) {
+    int active_indices[PROTOCOL_MAX_PLAYERS];
+    int active_count;
+    int i;
+
+    if (round == NULL || !round->active || round->participant_count < 2) {
+        return false;
+    }
+
+    active_count = 0;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (!round->players[i].active || !round->players[i].has_submitted) {
+            continue;
+        }
+
+        round->players[i].rewrite_target_index = ROUND_NO_TARGET;
+        round->players[i].has_rewritten = false;
+        round->players[i].rewrite_text[0] = '\0';
+        active_indices[active_count] = i;
+        active_count++;
+    }
+
+    if (active_count < 2) {
+        return false;
+    }
+
+    round->rewrite_count = 0;
+    for (i = active_count; i > 1; i--) {
+        int swap_index = rand() % i;
+        int temp = active_indices[i - 1];
+        active_indices[i - 1] = active_indices[swap_index];
+        active_indices[swap_index] = temp;
+    }
+
+    for (i = 0; i < active_count; i++) {
+        int player_index = active_indices[i];
+        int target_index = active_indices[(i + 1) % active_count];
+
+        round->players[player_index].rewrite_target_index = target_index;
+    }
+
+    return true;
+}
+
 bool round_record_submission(round_state_t *round,
                              size_t player_index,
                              const char *submission) {
@@ -215,7 +261,10 @@ bool round_record_rewrite(round_state_t *round,
     }
 
     player_state = &round->players[player_index];
-    if (!round->active || !player_state->active || player_state->has_rewritten) {
+    if (!round->active ||
+        !player_state->active ||
+        player_state->has_rewritten ||
+        player_state->rewrite_target_index == ROUND_NO_TARGET) {
         return false;
     }
 
@@ -272,6 +321,45 @@ int round_apply_missing_fallbacks(round_state_t *round) {
     return applied_count;
 }
 
+bool round_apply_empty_rewrite(round_state_t *round, size_t player_index) {
+    round_player_state_t *player_state;
+
+    if (round == NULL || player_index >= PROTOCOL_MAX_PLAYERS) {
+        return false;
+    }
+
+    player_state = &round->players[player_index];
+    if (!round->active ||
+        !player_state->active ||
+        player_state->has_rewritten ||
+        player_state->rewrite_target_index == ROUND_NO_TARGET) {
+        return false;
+    }
+
+    player_state->rewrite_text[0] = '\0';
+    player_state->has_rewritten = true;
+    round->rewrite_count++;
+    return true;
+}
+
+int round_apply_missing_rewrites(round_state_t *round) {
+    int applied_count;
+    size_t i;
+
+    if (round == NULL || !round->active) {
+        return 0;
+    }
+
+    applied_count = 0;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (round_apply_empty_rewrite(round, i)) {
+            applied_count++;
+        }
+    }
+
+    return applied_count;
+}
+
 bool round_record_vote(round_state_t *round,
                        size_t voter_index,
                        size_t target_index) {
@@ -315,6 +403,30 @@ time_t round_get_submission_deadline(const round_state_t *round) {
     return round->submission_deadline;
 }
 
+void round_set_rewrite_deadline(round_state_t *round, time_t deadline) {
+    if (round == NULL) {
+        return;
+    }
+
+    round->rewrite_deadline = deadline;
+}
+
+time_t round_get_rewrite_deadline(const round_state_t *round) {
+    if (round == NULL) {
+        return 0;
+    }
+
+    return round->rewrite_deadline;
+}
+
+int round_get_rewrite_target_index(const round_state_t *round, size_t player_index) {
+    if (round == NULL || player_index >= PROTOCOL_MAX_PLAYERS) {
+        return ROUND_NO_TARGET;
+    }
+
+    return round->players[player_index].rewrite_target_index;
+}
+
 const char *round_get_player_prompt(const round_state_t *round, size_t player_index) {
     if (round == NULL || player_index >= PROTOCOL_MAX_PLAYERS) {
         return NULL;
@@ -329,6 +441,27 @@ const char *round_get_player_submission(const round_state_t *round, size_t playe
     }
 
     return round->players[player_index].submission;
+}
+
+const char *round_get_title_for_submission_owner(const round_state_t *round,
+                                                 size_t player_index) {
+    size_t i;
+
+    if (round == NULL || player_index >= PROTOCOL_MAX_PLAYERS) {
+        return NULL;
+    }
+
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (!round->players[i].active) {
+            continue;
+        }
+
+        if (round->players[i].rewrite_target_index == (int)player_index) {
+            return round->players[i].rewrite_text;
+        }
+    }
+
+    return NULL;
 }
 
 bool round_all_submitted(const round_state_t *round) {
@@ -428,6 +561,7 @@ static void round_reset_player_state(round_player_state_t *player_state) {
     player_state->used_fallback = false;
     player_state->has_rewritten = false;
     player_state->has_voted = false;
+    player_state->rewrite_target_index = ROUND_NO_TARGET;
     player_state->assigned_prompt[0] = '\0';
     player_state->fallback_submission[0] = '\0';
     player_state->submission[0] = '\0';

@@ -4,7 +4,7 @@
  * Purpose:
  * Terminal client for the CSC209 A3 multiplayer game.
  * This client hides the plain-text wire protocol from the player by turning
- * normal terminal input into JOIN, READY, and SUBMIT messages internally.
+ * normal terminal input into JOIN, READY, SUBMIT, and TITLE messages internally.
  */
 
 #define _POSIX_C_SOURCE 200112L
@@ -33,6 +33,9 @@ typedef struct {
     bool joined;
     bool ready_sent;
     bool awaiting_submission;
+    bool awaiting_title;
+    bool awaiting_title_context;
+    char title_prompt[PROTOCOL_MAX_PROMPT_LEN + 1];
 } client_state_t;
 
 static void client_print_usage(const char *program_name);
@@ -41,11 +44,13 @@ static int client_send_all(int fd, const char *buffer, size_t len);
 static int client_send_join(int fd, const char *username);
 static int client_send_ready(int fd);
 static int client_send_submission(int fd, const char *submission);
+static int client_send_title(int fd, const char *title_text);
 static int client_run_loop(int fd);
 static void client_state_init(client_state_t *state);
 static void client_print_username_prompt(void);
 static void client_print_ready_prompt(void);
 static void client_print_answer_prompt(void);
+static void client_print_title_prompt(void);
 static int client_byte_is_allowed(unsigned char byte);
 static int client_handle_socket_data(const char *chunk,
                                      ssize_t chunk_len,
@@ -145,6 +150,19 @@ static int client_send_submission(int fd, const char *submission) {
     return client_send_all(fd, message, (size_t)written);
 }
 
+static int client_send_title(int fd, const char *title_text) {
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
+    int written;
+
+    written = snprintf(message, sizeof(message), "%s|%s\n",
+                       PROTOCOL_MSG_TITLE, title_text);
+    if (written < 0 || (size_t)written >= sizeof(message)) {
+        return -1;
+    }
+
+    return client_send_all(fd, message, (size_t)written);
+}
+
 static void client_state_init(client_state_t *state) {
     if (state == NULL) {
         return;
@@ -154,6 +172,9 @@ static void client_state_init(client_state_t *state) {
     state->joined = false;
     state->ready_sent = false;
     state->awaiting_submission = false;
+    state->awaiting_title = false;
+    state->awaiting_title_context = false;
+    state->title_prompt[0] = '\0';
 }
 
 static void client_print_username_prompt(void) {
@@ -168,6 +189,11 @@ static void client_print_ready_prompt(void) {
 
 static void client_print_answer_prompt(void) {
     fputs("Answer: ", stdout);
+    fflush(stdout);
+}
+
+static void client_print_title_prompt(void) {
+    fputs("Title: ", stdout);
     fflush(stdout);
 }
 
@@ -233,6 +259,8 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
 
     if (protocol_parse_prompt_text(line, prompt, sizeof(prompt))) {
         state->awaiting_submission = true;
+        state->awaiting_title = false;
+        state->awaiting_title_context = false;
         puts("");
         printf("Give an answer to the following question in %d seconds:\n",
                PROTOCOL_SUBMISSION_TIMEOUT_SECONDS);
@@ -241,7 +269,27 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         return 0;
     }
 
+    if (protocol_parse_title_text(line, prompt, sizeof(prompt))) {
+        strncpy(state->title_prompt, prompt, sizeof(state->title_prompt) - 1);
+        state->title_prompt[sizeof(state->title_prompt) - 1] = '\0';
+        state->awaiting_title_context = true;
+        return 0;
+    }
+
     if (protocol_parse_info_text(line, text, sizeof(text))) {
+        if (state->awaiting_title_context) {
+            state->awaiting_submission = false;
+            state->awaiting_title = true;
+            state->awaiting_title_context = false;
+            puts("");
+            printf("Write a funny title/header for the following post in %d seconds:\n",
+                   PROTOCOL_TITLE_TIMEOUT_SECONDS);
+            printf("Question: %s\n", state->title_prompt);
+            printf("Answer: %s\n", text);
+            client_print_title_prompt();
+            return 0;
+        }
+
         puts(text);
         return 0;
     }
@@ -252,6 +300,8 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
             client_print_username_prompt();
         } else if (state->awaiting_submission) {
             client_print_answer_prompt();
+        } else if (state->awaiting_title) {
+            client_print_title_prompt();
         } else if (!state->ready_sent) {
             client_print_ready_prompt();
         }
@@ -264,12 +314,16 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
                                      submission,
                                      sizeof(submission))) {
         state->awaiting_submission = false;
+        state->awaiting_title = false;
+        state->awaiting_title_context = false;
         printf("%s answered: %s\n", username, submission);
         return 0;
     }
 
     if (protocol_parse_winner_username(line, username, sizeof(username))) {
         state->awaiting_submission = false;
+        state->awaiting_title = false;
+        state->awaiting_title_context = false;
         printf("Round winner: %s\n", username);
         return 0;
     }
@@ -287,6 +341,8 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
             client_print_username_prompt();
         } else if (state->awaiting_submission) {
             client_print_answer_prompt();
+        } else if (state->awaiting_title) {
+            client_print_title_prompt();
         } else if (!state->ready_sent) {
             client_print_ready_prompt();
         }
@@ -325,6 +381,24 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
 
         state->awaiting_submission = false;
         puts("Answer sent. Waiting for the rest of the players...");
+        return 0;
+    }
+
+    if (state->awaiting_title) {
+        if (!protocol_submission_is_valid(line)) {
+            printf("Titles must be 1-%d printable characters and cannot include '|'.\n",
+                   PROTOCOL_MAX_SUBMISSION_LEN);
+            client_print_title_prompt();
+            return 0;
+        }
+
+        if (client_send_title(fd, line) != 0) {
+            perror("client: send");
+            return 1;
+        }
+
+        state->awaiting_title = false;
+        puts("Title sent. Waiting for the rest of the players...");
         return 0;
     }
 
