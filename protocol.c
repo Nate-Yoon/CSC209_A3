@@ -21,6 +21,12 @@ static bool protocol_parse_text_with_prefix(const char *line,
                                             const char *prefix,
                                             char *text_out,
                                             size_t text_out_size);
+static bool protocol_parse_two_fields(const char *line,
+                                      const char *prefix,
+                                      char *first_out,
+                                      size_t first_out_size,
+                                      char *second_out,
+                                      size_t second_out_size);
 static int protocol_checked_snprintf(char *buffer,
                                      size_t buffer_size,
                                      const char *format,
@@ -61,6 +67,35 @@ bool protocol_parse_join_username(const char *line,
                                            PROTOCOL_MSG_JOIN "|",
                                            username_out,
                                            username_out_size);
+}
+
+bool protocol_parse_welcome_id(const char *line, int *player_id_out) {
+    const char *prefix = PROTOCOL_MSG_WELCOME "|";
+    const char *number_start;
+    char *endptr;
+    long value;
+
+    if (line == NULL || player_id_out == NULL) {
+        return false;
+    }
+
+    if (strncmp(line, prefix, strlen(prefix)) != 0) {
+        return false;
+    }
+
+    number_start = line + strlen(prefix);
+    errno = 0;
+    value = strtol(number_start, &endptr, 10);
+    if (endptr == number_start || strcmp(endptr, "\n") != 0) {
+        return false;
+    }
+
+    if (errno == ERANGE || value <= 0 || value > INT_MAX) {
+        return false;
+    }
+
+    *player_id_out = (int)value;
+    return true;
 }
 
 bool protocol_parse_submit_text(const char *line,
@@ -108,6 +143,55 @@ bool protocol_parse_vote_target(const char *line, int *target_id_out) {
 
     *target_id_out = (int)value;
     return true;
+}
+
+bool protocol_parse_info_text(const char *line,
+                              char *text_out,
+                              size_t text_out_size) {
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_INFO "|",
+                                           text_out,
+                                           text_out_size);
+}
+
+bool protocol_parse_error_text(const char *line,
+                               char *text_out,
+                               size_t text_out_size) {
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_ERROR "|",
+                                           text_out,
+                                           text_out_size);
+}
+
+bool protocol_parse_prompt_text(const char *line,
+                                char *prompt_out,
+                                size_t prompt_out_size) {
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_PROMPT "|",
+                                           prompt_out,
+                                           prompt_out_size);
+}
+
+bool protocol_parse_result_fields(const char *line,
+                                  char *username_out,
+                                  size_t username_out_size,
+                                  char *submission_out,
+                                  size_t submission_out_size) {
+    return protocol_parse_two_fields(line,
+                                     PROTOCOL_MSG_RESULT "|",
+                                     username_out,
+                                     username_out_size,
+                                     submission_out,
+                                     submission_out_size);
+}
+
+bool protocol_parse_winner_username(const char *line,
+                                    char *username_out,
+                                    size_t username_out_size) {
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_WINNER "|",
+                                           username_out,
+                                           username_out_size);
 }
 
 bool protocol_username_is_valid(const char *username) {
@@ -185,6 +269,15 @@ int protocol_format_info(char *buffer, size_t buffer_size, const char *text) {
                                      PROTOCOL_MSG_INFO "|%s\n", text);
 }
 
+int protocol_format_prompt(char *buffer, size_t buffer_size, const char *prompt_text) {
+    if (buffer == NULL || buffer_size == 0 || prompt_text == NULL) {
+        return -1;
+    }
+
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_PROMPT "|%s\n", prompt_text);
+}
+
 int protocol_format_result(char *buffer,
                            size_t buffer_size,
                            const char *username,
@@ -236,6 +329,53 @@ static bool protocol_parse_text_with_prefix(const char *line,
 
     memcpy(text_out, text_start, text_len);
     text_out[text_len] = '\0';
+    return true;
+}
+
+static bool protocol_parse_two_fields(const char *line,
+                                      const char *prefix,
+                                      char *first_out,
+                                      size_t first_out_size,
+                                      char *second_out,
+                                      size_t second_out_size) {
+    const char *first_start;
+    const char *separator;
+    const char *second_start;
+    size_t first_len;
+    size_t second_len;
+
+    if (line == NULL || prefix == NULL ||
+        first_out == NULL || second_out == NULL ||
+        first_out_size == 0 || second_out_size == 0) {
+        return false;
+    }
+
+    if (strncmp(line, prefix, strlen(prefix)) != 0) {
+        return false;
+    }
+
+    first_start = line + strlen(prefix);
+    separator = strchr(first_start, '|');
+    if (separator == NULL) {
+        return false;
+    }
+
+    second_start = separator + 1;
+    second_len = strcspn(second_start, "\n");
+    if (second_start[second_len] != '\n') {
+        return false;
+    }
+
+    first_len = (size_t)(separator - first_start);
+    if (first_len == 0 || first_len >= first_out_size ||
+        second_len == 0 || second_len >= second_out_size) {
+        return false;
+    }
+
+    memcpy(first_out, first_start, first_len);
+    first_out[first_len] = '\0';
+    memcpy(second_out, second_start, second_len);
+    second_out[second_len] = '\0';
     return true;
 }
 

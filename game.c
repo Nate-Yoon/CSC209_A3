@@ -9,10 +9,11 @@
 
 #include "game.h"
 
+#include <stdio.h>
+#include <time.h>
 #include <string.h>
 
-static const char *const GAME_DEFAULT_PROMPT =
-    "Share a harmless opinion that could look terrible online.";
+static const char *const GAME_PROMPT_BANK_PATH = "question_prompts.txt";
 
 static game_player_t *game_find_player(game_state_t *game, int player_id);
 static const game_player_t *game_find_player_const(const game_state_t *game,
@@ -289,14 +290,14 @@ bool game_start(game_state_t *game) {
         return false;
     }
 
-    return game_begin_round(game, GAME_DEFAULT_PROMPT);
+    return game_begin_round(game);
 }
 
-bool game_begin_round(game_state_t *game, const char *prompt) {
+bool game_begin_round(game_state_t *game) {
     size_t i;
     int next_round_number;
 
-    if (game == NULL || prompt == NULL) {
+    if (game == NULL) {
         return false;
     }
 
@@ -305,7 +306,7 @@ bool game_begin_round(game_state_t *game, const char *prompt) {
     }
 
     next_round_number = game->round_number + 1;
-    if (!round_begin(&game->current_round, next_round_number, prompt)) {
+    if (!round_begin(&game->current_round, next_round_number)) {
         return false;
     }
 
@@ -315,6 +316,15 @@ bool game_begin_round(game_state_t *game, const char *prompt) {
         }
     }
 
+    if (!round_assign_prompts_from_file(&game->current_round, GAME_PROMPT_BANK_PATH)) {
+        fprintf(stderr, "game: failed to initialize round prompts from %s\n",
+                GAME_PROMPT_BANK_PATH);
+        round_state_reset(&game->current_round);
+        return false;
+    }
+
+    round_set_submission_deadline(&game->current_round,
+                                  time(NULL) + PROTOCOL_SUBMISSION_TIMEOUT_SECONDS);
     game->round_number = next_round_number;
     game->phase = GAME_PHASE_PROMPT;
     return true;
@@ -397,6 +407,33 @@ void game_handle_disconnect(game_state_t *game, int player_id) {
     }
 }
 
+time_t game_get_submission_deadline(const game_state_t *game) {
+    if (game == NULL || game->phase != GAME_PHASE_PROMPT) {
+        return 0;
+    }
+
+    return round_get_submission_deadline(&game->current_round);
+}
+
+int game_apply_submission_timeout(game_state_t *game, time_t now) {
+    int fallback_count;
+    time_t deadline;
+
+    if (game == NULL || game->phase != GAME_PHASE_PROMPT) {
+        return 0;
+    }
+
+    deadline = round_get_submission_deadline(&game->current_round);
+    if (deadline == 0 || now < deadline) {
+        return 0;
+    }
+
+    round_set_submission_deadline(&game->current_round, 0);
+    fallback_count = round_apply_missing_fallbacks(&game->current_round);
+    game_advance_phase_if_ready(game);
+    return fallback_count;
+}
+
 const game_player_t *game_get_player(const game_state_t *game, int player_id) {
     return game_find_player_const(game, player_id);
 }
@@ -415,6 +452,21 @@ const round_state_t *game_get_current_round(const game_state_t *game) {
     }
 
     return &game->current_round;
+}
+
+const char *game_get_player_prompt(const game_state_t *game, int player_id) {
+    int player_index;
+
+    if (game == NULL) {
+        return NULL;
+    }
+
+    player_index = game_find_player_index(game, player_id);
+    if (player_index < 0) {
+        return NULL;
+    }
+
+    return round_get_player_prompt(&game->current_round, (size_t)player_index);
 }
 
 bool game_pick_round_winner(const game_state_t *game,

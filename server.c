@@ -60,6 +60,9 @@ static int server_handle_submit_line(server_state_t *server,
                                      size_t client_index,
                                      const char *line);
 static void server_maybe_start_game(server_state_t *server);
+static bool server_get_select_timeout(const server_state_t *server,
+                                      struct timeval *timeout_out);
+static void server_enforce_prompt_deadline(server_state_t *server);
 static void server_handle_phase_change(server_state_t *server);
 static void server_announce_round_start(server_state_t *server);
 static void server_broadcast_round_results(server_state_t *server);
@@ -189,6 +192,8 @@ static int server_create_listener(const char *port_text) {
 static int server_run_select_loop(server_state_t *server) {
     for (;;) {
         fd_set read_fds;
+        struct timeval timeout;
+        struct timeval *timeout_ptr;
         int max_fd;
         int ready_count;
         size_t i;
@@ -196,6 +201,7 @@ static int server_run_select_loop(server_state_t *server) {
         FD_ZERO(&read_fds);
         FD_SET(server->listen_fd, &read_fds);
         max_fd = server->listen_fd;
+        timeout_ptr = NULL;
 
         for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
             if (!server->clients[i].active) {
@@ -208,7 +214,11 @@ static int server_run_select_loop(server_state_t *server) {
             }
         }
 
-        ready_count = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
+        if (server_get_select_timeout(server, &timeout)) {
+            timeout_ptr = &timeout;
+        }
+
+        ready_count = select(max_fd + 1, &read_fds, NULL, NULL, timeout_ptr);
         if (ready_count < 0) {
             if (errno == EINTR) {
                 continue;
@@ -216,6 +226,11 @@ static int server_run_select_loop(server_state_t *server) {
 
             perror("server: select");
             return EXIT_FAILURE;
+        }
+
+        if (ready_count == 0) {
+            server_enforce_prompt_deadline(server);
+            continue;
         }
 
         if (FD_ISSET(server->listen_fd, &read_fds)) {
@@ -415,6 +430,8 @@ static bool server_byte_is_allowed(unsigned char byte) {
 static int server_handle_client_line(server_state_t *server,
                                      size_t client_index,
                                      const char *line) {
+    server_enforce_prompt_deadline(server);
+
     switch (protocol_identify_message(line)) {
         case PROTOCOL_TYPE_JOIN:
             return server_handle_join_line(server, client_index, line);
@@ -628,7 +645,9 @@ static void server_maybe_start_game(server_state_t *server) {
     }
 
     if (!game_start(&server->game)) {
-        fprintf(stderr, "server: game_start rejected ready lobby\n");
+        server_broadcast_info(server,
+                              "game could not start because question_prompts.txt could not be loaded");
+        fprintf(stderr, "server: game_start failed during prompt-bank setup\n");
         return;
     }
 
@@ -636,6 +655,49 @@ static void server_maybe_start_game(server_state_t *server) {
     server_announce_round_start(server);
     fprintf(stderr, "server: game starting with %d players\n",
             game_count_joined_players(&server->game));
+}
+
+static bool server_get_select_timeout(const server_state_t *server,
+                                      struct timeval *timeout_out) {
+    time_t deadline;
+    time_t now;
+
+    if (server == NULL || timeout_out == NULL) {
+        return false;
+    }
+
+    deadline = game_get_submission_deadline(&server->game);
+    if (deadline == 0) {
+        return false;
+    }
+
+    now = time(NULL);
+    timeout_out->tv_usec = 0;
+    if (deadline <= now) {
+        timeout_out->tv_sec = 0;
+        return true;
+    }
+
+    timeout_out->tv_sec = deadline - now;
+    return true;
+}
+
+static void server_enforce_prompt_deadline(server_state_t *server) {
+    int fallback_count;
+
+    if (server == NULL) {
+        return;
+    }
+
+    fallback_count = game_apply_submission_timeout(&server->game, time(NULL));
+    if (fallback_count > 0) {
+        server_broadcast_info(server,
+                              "submission time expired; fallback answers were used for missing players");
+    }
+
+    if (server->game.phase == GAME_PHASE_RESULTS) {
+        server_handle_phase_change(server);
+    }
 }
 
 static void server_handle_phase_change(server_state_t *server) {
@@ -650,21 +712,33 @@ static void server_handle_phase_change(server_state_t *server) {
 }
 
 static void server_announce_round_start(server_state_t *server) {
-    const round_state_t *round;
     char message[PROTOCOL_LINE_BUFFER_SIZE];
+    size_t i;
 
     if (server == NULL) {
         return;
     }
 
-    round = game_get_current_round(&server->game);
-    if (round == NULL) {
-        return;
-    }
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        const char *prompt_text;
 
-    snprintf(message, sizeof(message), "%s|%s\n",
-             PROTOCOL_MSG_PROMPT, round->prompt);
-    server_broadcast_message(server, message);
+        if (!server->clients[i].active || !server_client_has_joined(&server->clients[i])) {
+            continue;
+        }
+
+        prompt_text = game_get_player_prompt(&server->game, server->clients[i].player_id);
+        if (prompt_text == NULL) {
+            continue;
+        }
+
+        if (protocol_format_prompt(message, sizeof(message), prompt_text) < 0) {
+            continue;
+        }
+
+        if (server_send_to_client(&server->clients[i], message) != 0) {
+            server_remove_client(server, i, "send failure");
+        }
+    }
 }
 
 static void server_broadcast_round_results(server_state_t *server) {
@@ -682,15 +756,15 @@ static void server_broadcast_round_results(server_state_t *server) {
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         const game_player_t *player = game_get_player_at(&server->game, i);
-        const round_player_state_t *round_player = &round->players[i];
+        const char *submission = round_get_player_submission(round, i);
 
-        if (player == NULL || !player->joined || !round_player->has_submitted) {
+        if (player == NULL || !player->joined || submission == NULL || submission[0] == '\0') {
             continue;
         }
 
         if (protocol_format_result(message, sizeof(message),
                                    player->username,
-                                   round_player->submission) >= 0) {
+                                   submission) >= 0) {
             server_broadcast_message(server, message);
         }
     }
