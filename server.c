@@ -70,6 +70,11 @@ static void server_handle_phase_change(server_state_t *server);
 static void server_announce_round_start(server_state_t *server);
 static void server_announce_title_phase(server_state_t *server);
 static void server_broadcast_round_results(server_state_t *server);
+static void server_broadcast_stage_banner(const server_state_t *server,
+                                          const char *label);
+static void server_format_stage_line(char *buffer,
+                                     size_t buffer_size,
+                                     const char *label);
 static const game_player_t *server_get_client_player(const server_state_t *server,
                                                      size_t client_index);
 static bool server_client_has_joined(const server_client_t *client);
@@ -370,6 +375,7 @@ static void server_remove_client(server_state_t *server,
         if (phase_before_disconnect != GAME_PHASE_LOBBY &&
             phase_before_disconnect != GAME_PHASE_OVER &&
             server->game.phase == GAME_PHASE_OVER) {
+            server_broadcast_stage_banner(server, "Game Over");
             server_broadcast_info(server,
                                   "game ended because too few players remain connected");
             return;
@@ -660,9 +666,7 @@ static int server_handle_title_line(server_state_t *server,
                                     const char *line) {
     server_client_t *client;
     const game_player_t *player;
-    const round_state_t *round;
     char title_text[PROTOCOL_MAX_SUBMISSION_LEN + 1];
-    char message[PROTOCOL_LINE_BUFFER_SIZE];
     game_action_result_t result;
 
     client = &server->clients[client_index];
@@ -698,18 +702,6 @@ static int server_handle_title_line(server_state_t *server,
         return 0;
     }
 
-    if (server_send_to_client(client, PROTOCOL_MSG_INFO "|title received\n") != 0) {
-        server_remove_client(server, client_index, "send failure");
-        return -1;
-    }
-
-    round = game_get_current_round(&server->game);
-    if (round != NULL) {
-        snprintf(message, sizeof(message), "title received (%d/%d)",
-                 round->rewrite_count, round->participant_count);
-        server_broadcast_info(server, message);
-    }
-
     player = server_get_client_player(server, client_index);
     if (player != NULL) {
         fprintf(stderr, "server: received title from slot %zu (%s)\n",
@@ -736,6 +728,7 @@ static void server_maybe_start_game(server_state_t *server) {
     }
 
     server_broadcast_info(server, "all players ready, game starting");
+    server_broadcast_stage_banner(server, "Question Round");
     server_announce_round_start(server);
     fprintf(stderr, "server: game starting with %d players\n",
             game_count_joined_players(&server->game));
@@ -797,11 +790,13 @@ static void server_handle_phase_change(server_state_t *server) {
     }
 
     if (server->game.phase == GAME_PHASE_REWRITE) {
+        server_broadcast_stage_banner(server, "Title Trouble");
         server_announce_title_phase(server);
         return;
     }
 
     if (server->game.phase == GAME_PHASE_RESULTS) {
+        server_broadcast_stage_banner(server, "The Big Reveal");
         server_broadcast_round_results(server);
         game_finish_round(&server->game);
     }
@@ -846,34 +841,24 @@ static void server_announce_title_phase(server_state_t *server) {
     }
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
-        const char *prompt_text;
         const char *submission_text;
 
         if (!server->clients[i].active || !server_client_has_joined(&server->clients[i])) {
             continue;
         }
 
-        prompt_text = game_get_player_rewrite_prompt(&server->game,
-                                                     server->clients[i].player_id);
         submission_text = game_get_player_rewrite_submission(&server->game,
                                                              server->clients[i].player_id);
-        if (prompt_text == NULL || submission_text == NULL) {
+        if (submission_text == NULL) {
             continue;
         }
 
-        if (protocol_format_title(message, sizeof(message), prompt_text) < 0) {
+        if (protocol_format_title(message, sizeof(message), submission_text) < 0) {
             continue;
         }
         if (server_send_to_client(&server->clients[i], message) != 0) {
             server_remove_client(server, i, "send failure");
             continue;
-        }
-
-        if (protocol_format_info(message, sizeof(message), submission_text) < 0) {
-            continue;
-        }
-        if (server_send_to_client(&server->clients[i], message) != 0) {
-            server_remove_client(server, i, "send failure");
         }
     }
 }
@@ -890,7 +875,7 @@ static void server_broadcast_round_results(server_state_t *server) {
         return;
     }
 
-    server_broadcast_info(server, "revealing round results");
+    server_broadcast_info(server, "Here is what everyone came up with:");
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         const game_player_t *player = game_get_player_at(&server->game, i);
@@ -919,7 +904,64 @@ static void server_broadcast_round_results(server_state_t *server) {
         }
     }
 
-    server_broadcast_info(server, "round over");
+    server_broadcast_info(server, "End of round.");
+}
+
+static void server_broadcast_stage_banner(const server_state_t *server,
+                                          const char *label) {
+    static const char separator[] = "________________________________________";
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
+    char label_line[PROTOCOL_LINE_BUFFER_SIZE];
+
+    if (server == NULL || label == NULL) {
+        return;
+    }
+
+    if (protocol_format_info(message, sizeof(message), separator) >= 0) {
+        server_broadcast_message(server, message);
+    }
+
+    server_format_stage_line(label_line, sizeof(label_line), label);
+    if (protocol_format_info(message, sizeof(message), label_line) >= 0) {
+        server_broadcast_message(server, message);
+    }
+
+    if (protocol_format_info(message, sizeof(message), separator) >= 0) {
+        server_broadcast_message(server, message);
+    }
+}
+
+static void server_format_stage_line(char *buffer,
+                                     size_t buffer_size,
+                                     const char *label) {
+    enum {
+        STAGE_INNER_WIDTH = 38
+    };
+    size_t label_len;
+    size_t left_padding;
+    size_t right_padding;
+
+    if (buffer == NULL || buffer_size == 0) {
+        return;
+    }
+
+    if (label == NULL) {
+        buffer[0] = '\0';
+        return;
+    }
+
+    label_len = strlen(label);
+    if (label_len > STAGE_INNER_WIDTH) {
+        label_len = STAGE_INNER_WIDTH;
+    }
+
+    left_padding = (STAGE_INNER_WIDTH - label_len) / 2;
+    right_padding = STAGE_INNER_WIDTH - label_len - left_padding;
+
+    snprintf(buffer, buffer_size, "|%*s%.*s%*s|",
+             (int)left_padding, "",
+             (int)label_len, label,
+             (int)right_padding, "");
 }
 
 static const game_player_t *server_get_client_player(const server_state_t *server,

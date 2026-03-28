@@ -34,8 +34,6 @@ typedef struct {
     bool ready_sent;
     bool awaiting_submission;
     bool awaiting_title;
-    bool awaiting_title_context;
-    char title_prompt[PROTOCOL_MAX_PROMPT_LEN + 1];
 } client_state_t;
 
 static void client_print_usage(const char *program_name);
@@ -51,6 +49,7 @@ static void client_print_username_prompt(void);
 static void client_print_ready_prompt(void);
 static void client_print_answer_prompt(void);
 static void client_print_title_prompt(void);
+static void client_break_prompt_line(const client_state_t *state);
 static int client_byte_is_allowed(unsigned char byte);
 static int client_handle_socket_data(const char *chunk,
                                      ssize_t chunk_len,
@@ -173,8 +172,6 @@ static void client_state_init(client_state_t *state) {
     state->ready_sent = false;
     state->awaiting_submission = false;
     state->awaiting_title = false;
-    state->awaiting_title_context = false;
-    state->title_prompt[0] = '\0';
 }
 
 static void client_print_username_prompt(void) {
@@ -193,8 +190,18 @@ static void client_print_answer_prompt(void) {
 }
 
 static void client_print_title_prompt(void) {
-    fputs("Title: ", stdout);
+    fputs("Would be a stupid answer to...: ", stdout);
     fflush(stdout);
+}
+
+static void client_break_prompt_line(const client_state_t *state) {
+    if (state == NULL) {
+        return;
+    }
+
+    if (state->awaiting_submission || state->awaiting_title) {
+        fputc('\n', stdout);
+    }
 }
 
 static int client_byte_is_allowed(unsigned char byte) {
@@ -260,7 +267,6 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
     if (protocol_parse_prompt_text(line, prompt, sizeof(prompt))) {
         state->awaiting_submission = true;
         state->awaiting_title = false;
-        state->awaiting_title_context = false;
         puts("");
         printf("Give an answer to the following question in %d seconds:\n",
                PROTOCOL_SUBMISSION_TIMEOUT_SECONDS);
@@ -270,31 +276,24 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
     }
 
     if (protocol_parse_title_text(line, prompt, sizeof(prompt))) {
-        strncpy(state->title_prompt, prompt, sizeof(state->title_prompt) - 1);
-        state->title_prompt[sizeof(state->title_prompt) - 1] = '\0';
-        state->awaiting_title_context = true;
+        state->awaiting_submission = false;
+        state->awaiting_title = true;
+        puts("");
+        printf("Give the following post a funny title in %d seconds:\n",
+               PROTOCOL_TITLE_TIMEOUT_SECONDS);
+        puts(prompt);
+        client_print_title_prompt();
         return 0;
     }
 
     if (protocol_parse_info_text(line, text, sizeof(text))) {
-        if (state->awaiting_title_context) {
-            state->awaiting_submission = false;
-            state->awaiting_title = true;
-            state->awaiting_title_context = false;
-            puts("");
-            printf("Write a funny title/header for the following post in %d seconds:\n",
-                   PROTOCOL_TITLE_TIMEOUT_SECONDS);
-            printf("Question: %s\n", state->title_prompt);
-            printf("Answer: %s\n", text);
-            client_print_title_prompt();
-            return 0;
-        }
-
+        client_break_prompt_line(state);
         puts(text);
         return 0;
     }
 
     if (protocol_parse_error_text(line, text, sizeof(text))) {
+        client_break_prompt_line(state);
         printf("Error: %s\n", text);
         if (!state->joined) {
             client_print_username_prompt();
@@ -313,21 +312,22 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
                                      sizeof(username),
                                      submission,
                                      sizeof(submission))) {
+        client_break_prompt_line(state);
         state->awaiting_submission = false;
         state->awaiting_title = false;
-        state->awaiting_title_context = false;
-        printf("%s answered: %s\n", username, submission);
+        printf("%s posted: %s\n", username, submission);
         return 0;
     }
 
     if (protocol_parse_winner_username(line, username, sizeof(username))) {
+        client_break_prompt_line(state);
         state->awaiting_submission = false;
         state->awaiting_title = false;
-        state->awaiting_title_context = false;
         printf("Round winner: %s\n", username);
         return 0;
     }
 
+    client_break_prompt_line(state);
     fputs(line, stdout);
     fflush(stdout);
     return 0;
