@@ -22,6 +22,14 @@ enum {
     ROUND_NO_ENTRY = -1
 };
 
+typedef enum {
+    ROUND_CATEGORY_NONE = 0,
+    ROUND_CATEGORY_HEADLINES,
+    ROUND_CATEGORY_CAPTIONS,
+    ROUND_CATEGORY_REVIEWS,
+    ROUND_CATEGORY_FORUMS
+} round_category_t;
+
 typedef struct {
     bool active;
     bool has_submitted;
@@ -40,6 +48,7 @@ typedef struct {
 typedef struct {
     bool active;
     int round_number;
+    round_category_t category;
     int participant_count;
     int submission_count;
     int rewrite_count;
@@ -58,7 +67,9 @@ typedef struct {
 
 void round_state_init(round_state_t *round);
 void round_state_reset(round_state_t *round);
-bool round_begin(round_state_t *round, int round_number);
+bool round_begin(round_state_t *round,
+                 int round_number,
+                 round_category_t category);
 bool round_set_player_active(round_state_t *round, size_t player_index, bool active);
 bool round_assign_prompts_from_file(round_state_t *round, const char *file_path);
 bool round_assign_rewrite_targets(round_state_t *round);

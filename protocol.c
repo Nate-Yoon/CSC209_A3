@@ -120,6 +120,19 @@ bool protocol_parse_title_text(const char *line,
                                            title_out_size);
 }
 
+bool protocol_parse_title_prompt_fields(const char *line,
+                                        char *category_out,
+                                        size_t category_out_size,
+                                        char *text_out,
+                                        size_t text_out_size) {
+    return protocol_parse_two_fields(line,
+                                     PROTOCOL_MSG_TITLE "|",
+                                     category_out,
+                                     category_out_size,
+                                     text_out,
+                                     text_out_size);
+}
+
 bool protocol_parse_rewrite_text(const char *line,
                                  char *rewrite_out,
                                  size_t rewrite_out_size) {
@@ -300,6 +313,19 @@ int protocol_format_title(char *buffer, size_t buffer_size, const char *title_te
                                      PROTOCOL_MSG_TITLE "|%s\n", title_text);
 }
 
+int protocol_format_title_prompt(char *buffer,
+                                 size_t buffer_size,
+                                 const char *category,
+                                 const char *text) {
+    if (buffer == NULL || buffer_size == 0 || category == NULL || text == NULL) {
+        return -1;
+    }
+
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_TITLE "|%s|%s\n",
+                                     category, text);
+}
+
 int protocol_format_result(char *buffer,
                            size_t buffer_size,
                            const char *username,
@@ -345,7 +371,7 @@ static bool protocol_parse_text_with_prefix(const char *line,
         return false;
     }
 
-    if (text_len == 0 || text_len >= text_out_size) {
+    if (text_len >= text_out_size) {
         return false;
     }
 
