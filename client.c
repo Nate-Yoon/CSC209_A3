@@ -184,10 +184,6 @@ static int client_send_vote(int fd, int option_number) {
 }
 
 static void client_state_init(client_state_t *state) {
-    if (state == NULL) {
-        return;
-    }
-
     state->player_id = 0;
     state->joined = false;
     state->ready_sent = false;
@@ -215,10 +211,6 @@ static void client_print_answer_prompt(void) {
 }
 
 static const char *client_title_phase_intro(const client_state_t *state) {
-    if (state == NULL) {
-        return "Give the following post a funny title in 60 seconds:";
-    }
-
     if (strcmp(state->title_category, "headlines") == 0) {
         return "Write a funny news headline for the following comment in 60 seconds:";
     }
@@ -236,10 +228,6 @@ static const char *client_title_phase_intro(const client_state_t *state) {
 }
 
 static const char *client_title_input_prompt(const client_state_t *state) {
-    if (state == NULL) {
-        return "Title: ";
-    }
-
     if (strcmp(state->title_category, "headlines") == 0) {
         return "Headline: ";
     }
@@ -262,7 +250,7 @@ static void client_print_title_prompt(const client_state_t *state) {
 }
 
 static void client_print_vote_prompt(const client_state_t *state) {
-    if (state == NULL || state->vote_option_count <= 0) {
+    if (state->vote_option_count <= 0) {
         return;
     }
 
@@ -272,10 +260,6 @@ static void client_print_vote_prompt(const client_state_t *state) {
 }
 
 static void client_break_prompt_line(client_state_t *state) {
-    if (state == NULL) {
-        return;
-    }
-
     if (state->prompt_line_active) {
         fputc('\n', stdout);
         state->prompt_line_active = false;

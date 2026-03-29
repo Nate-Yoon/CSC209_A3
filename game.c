@@ -782,10 +782,6 @@ static int game_find_player_index(const game_state_t *game, int player_id) {
 static int game_find_open_player_slot(const game_state_t *game) {
     int i;
 
-    if (game == NULL) {
-        return -1;
-    }
-
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         if (!game->players[i].joined) {
             return i;
@@ -797,10 +793,6 @@ static int game_find_open_player_slot(const game_state_t *game) {
 
 static bool game_username_is_unique(const game_state_t *game, const char *username) {
     size_t i;
-
-    if (game == NULL || username == NULL) {
-        return false;
-    }
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         if (!game->players[i].joined) {
@@ -816,10 +808,6 @@ static bool game_username_is_unique(const game_state_t *game, const char *userna
 }
 
 static void game_reset_player(game_player_t *player) {
-    if (player == NULL) {
-        return;
-    }
-
     player->player_id = 0;
     player->username[0] = '\0';
     player->score = 0;

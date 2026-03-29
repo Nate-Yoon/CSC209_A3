@@ -821,10 +821,6 @@ int round_pick_random_submitted_index(const round_state_t *round) {
 }
 
 static void round_reset_player_state(round_player_state_t *player_state) {
-    if (player_state == NULL) {
-        return;
-    }
-
     player_state->active = false;
     player_state->has_submitted = false;
     player_state->submitted_manually = false;
@@ -840,7 +836,7 @@ static void round_reset_player_state(round_player_state_t *player_state) {
 }
 
 static round_category_t round_category_from_header(const char *line) {
-    if (line == NULL || line[0] != '#') {
+    if (line[0] != '#') {
         return ROUND_CATEGORY_NONE;
     }
 
@@ -1106,10 +1102,6 @@ static round_content_result_t round_read_next_content_line(FILE *file,
 static bool round_report_load_error(const char *file_path,
                                     size_t line_number,
                                     const char *reason) {
-    if (file_path == NULL || reason == NULL) {
-        return false;
-    }
-
     if (line_number == 0) {
         fprintf(stderr, "round: prompt bank %s is invalid: %s\n",
                 file_path, reason);
@@ -1123,10 +1115,6 @@ static bool round_report_load_error(const char *file_path,
 
 static void round_strip_newline(char *text) {
     size_t len;
-
-    if (text == NULL) {
-        return;
-    }
 
     len = strlen(text);
     while (len > 0 && (text[len - 1] == '\n' || text[len - 1] == '\r')) {
