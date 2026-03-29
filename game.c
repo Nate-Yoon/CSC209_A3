@@ -23,6 +23,8 @@ static int game_find_open_player_slot(const game_state_t *game);
 static bool game_username_is_unique(const game_state_t *game, const char *username);
 static void game_reset_player(game_player_t *player);
 static int game_get_rewrite_target_index_for_player(const game_state_t *game, int player_id);
+static int game_get_reveal_owner_index_at(const game_state_t *game, size_t reveal_index);
+static bool game_apply_round_scores(game_state_t *game);
 
 void game_state_init(game_state_t *game) {
     if (game == NULL) {
@@ -324,8 +326,7 @@ bool game_begin_round(game_state_t *game) {
         return false;
     }
 
-    round_set_submission_deadline(&game->current_round,
-                                  time(NULL) + PROTOCOL_SUBMISSION_TIMEOUT_SECONDS);
+    round_set_submission_deadline(&game->current_round, 0);
     game->round_number = next_round_number;
     game->phase = GAME_PHASE_PROMPT;
     return true;
@@ -347,8 +348,7 @@ bool game_advance_phase_if_ready(game_state_t *game) {
             return true;
         }
 
-        round_set_rewrite_deadline(&game->current_round,
-                                   time(NULL) + PROTOCOL_TITLE_TIMEOUT_SECONDS);
+        round_set_rewrite_deadline(&game->current_round, 0);
         game->phase = GAME_PHASE_REWRITE;
         return true;
     }
@@ -356,16 +356,27 @@ bool game_advance_phase_if_ready(game_state_t *game) {
     if (game->phase == GAME_PHASE_REWRITE &&
         round_all_rewritten(&game->current_round)) {
         round_set_rewrite_deadline(&game->current_round, 0);
-        /*
-         * TODO: Replace this placeholder with the real post-title phase once
-         * voting and scoring are implemented.
-         */
-        game->phase = GAME_PHASE_RESULTS;
+        if (!round_prepare_voting(&game->current_round)) {
+            fprintf(stderr,
+                    "game: could not prepare voting for round %d; continuing to results\n",
+                    game->round_number);
+            game->phase = GAME_PHASE_RESULTS;
+            return true;
+        }
+
+        round_set_voting_deadline(&game->current_round, 0);
+        game->phase = GAME_PHASE_VOTING;
         return true;
     }
 
     if (game->phase == GAME_PHASE_VOTING &&
         round_all_voted(&game->current_round)) {
+        round_set_voting_deadline(&game->current_round, 0);
+        if (!game_apply_round_scores(game)) {
+            fprintf(stderr,
+                    "game: could not finalize round %d scoring\n",
+                    game->round_number);
+        }
         game->phase = GAME_PHASE_RESULTS;
         return true;
     }
@@ -378,10 +389,10 @@ bool game_finish_round(game_state_t *game) {
         return false;
     }
 
-    /*
-     * TODO: Replace this single-round placeholder with real scoring and
-     * multi-round progression once those rules are implemented.
-     */
+    if (!game_is_final_round(game)) {
+        return game_begin_round(game);
+    }
+
     game_end(game);
     return true;
 }
@@ -425,6 +436,33 @@ void game_handle_disconnect(game_state_t *game, int player_id) {
     }
 }
 
+void game_start_prompt_window(game_state_t *game, time_t now) {
+    if (game == NULL || game->phase != GAME_PHASE_PROMPT) {
+        return;
+    }
+
+    round_set_submission_deadline(&game->current_round,
+                                  now + PROTOCOL_SUBMISSION_TIMEOUT_SECONDS);
+}
+
+void game_start_title_window(game_state_t *game, time_t now) {
+    if (game == NULL || game->phase != GAME_PHASE_REWRITE) {
+        return;
+    }
+
+    round_set_rewrite_deadline(&game->current_round,
+                               now + PROTOCOL_TITLE_TIMEOUT_SECONDS);
+}
+
+void game_start_vote_window(game_state_t *game, time_t now) {
+    if (game == NULL || game->phase != GAME_PHASE_VOTING) {
+        return;
+    }
+
+    round_set_voting_deadline(&game->current_round,
+                              now + PROTOCOL_VOTE_TIMEOUT_SECONDS);
+}
+
 time_t game_get_phase_deadline(const game_state_t *game) {
     if (game == NULL) {
         return 0;
@@ -436,6 +474,10 @@ time_t game_get_phase_deadline(const game_state_t *game) {
 
     if (game->phase == GAME_PHASE_REWRITE) {
         return round_get_rewrite_deadline(&game->current_round);
+    }
+
+    if (game->phase == GAME_PHASE_VOTING) {
+        return round_get_voting_deadline(&game->current_round);
     }
 
     return 0;
@@ -473,7 +515,23 @@ int game_apply_phase_timeout(game_state_t *game, time_t now) {
         return applied_count;
     }
 
+    if (game->phase == GAME_PHASE_VOTING) {
+        deadline = round_get_voting_deadline(&game->current_round);
+        if (deadline == 0 || now < deadline) {
+            return 0;
+        }
+
+        round_set_voting_deadline(&game->current_round, 0);
+        applied_count = round_apply_missing_votes(&game->current_round);
+        game_advance_phase_if_ready(game);
+        return applied_count;
+    }
+
     return 0;
+}
+
+bool game_is_final_round(const game_state_t *game) {
+    return game != NULL && game->round_number >= GAME_TOTAL_ROUNDS;
 }
 
 const game_player_t *game_get_player(const game_state_t *game, int player_id) {
@@ -541,25 +599,92 @@ const char *game_get_player_rewrite_submission(const game_state_t *game, int pla
     return round_get_player_submission(&game->current_round, (size_t)target_index);
 }
 
-bool game_pick_round_winner(const game_state_t *game,
-                            char *username_out,
-                            size_t username_out_size) {
-    int winner_index;
-
-    if (game == NULL || username_out == NULL || username_out_size == 0) {
-        return false;
+int game_get_reveal_entry_count(const game_state_t *game) {
+    if (game == NULL) {
+        return 0;
     }
 
-    winner_index = round_pick_random_submitted_index(&game->current_round);
-    if (winner_index < 0) {
-        return false;
+    return round_get_reveal_count(&game->current_round);
+}
+
+const char *game_get_reveal_prompt_at(const game_state_t *game, size_t reveal_index) {
+    int owner_index;
+
+    owner_index = game_get_reveal_owner_index_at(game, reveal_index);
+    if (owner_index < 0) {
+        return NULL;
     }
 
-    strncpy(username_out,
-            game->players[winner_index].username,
-            username_out_size - 1);
-    username_out[username_out_size - 1] = '\0';
-    return true;
+    return round_get_player_prompt(&game->current_round, (size_t)owner_index);
+}
+
+const char *game_get_reveal_submission_at(const game_state_t *game, size_t reveal_index) {
+    int owner_index;
+
+    owner_index = game_get_reveal_owner_index_at(game, reveal_index);
+    if (owner_index < 0) {
+        return NULL;
+    }
+
+    return round_get_player_submission(&game->current_round, (size_t)owner_index);
+}
+
+const char *game_get_reveal_title_at(const game_state_t *game, size_t reveal_index) {
+    int owner_index;
+
+    owner_index = game_get_reveal_owner_index_at(game, reveal_index);
+    if (owner_index < 0) {
+        return NULL;
+    }
+
+    return round_get_title_for_submission_owner(&game->current_round, (size_t)owner_index);
+}
+
+int game_get_vote_target_player_id_at(const game_state_t *game, int option_number) {
+    int owner_index;
+
+    if (game == NULL || option_number <= 0) {
+        return 0;
+    }
+
+    owner_index = game_get_reveal_owner_index_at(game, (size_t)(option_number - 1));
+    if (owner_index < 0) {
+        return 0;
+    }
+
+    return game->players[owner_index].player_id;
+}
+
+int game_get_player_forbidden_vote_option(const game_state_t *game, int player_id) {
+    int player_index;
+    int forbidden_owner_index;
+    int reveal_index;
+
+    if (game == NULL || player_id <= 0) {
+        return 0;
+    }
+
+    player_index = game_find_player_index(game, player_id);
+    if (player_index < 0) {
+        return 0;
+    }
+
+    forbidden_owner_index = round_get_rewrite_target_index(&game->current_round,
+                                                           (size_t)player_index);
+    if (forbidden_owner_index < 0) {
+        return 0;
+    }
+
+    for (reveal_index = 0;
+         reveal_index < round_get_reveal_count(&game->current_round);
+         reveal_index++) {
+        if (round_get_reveal_owner_at(&game->current_round, (size_t)reveal_index) ==
+            forbidden_owner_index) {
+            return reveal_index + 1;
+        }
+    }
+
+    return 0;
 }
 
 const char *game_action_result_message(game_action_result_t result) {
@@ -702,4 +827,36 @@ static int game_get_rewrite_target_index_for_player(const game_state_t *game, in
     }
 
     return round_get_rewrite_target_index(&game->current_round, (size_t)player_index);
+}
+
+static int game_get_reveal_owner_index_at(const game_state_t *game, size_t reveal_index) {
+    if (game == NULL) {
+        return ROUND_NO_ENTRY;
+    }
+
+    return round_get_reveal_owner_at(&game->current_round, reveal_index);
+}
+
+static bool game_apply_round_scores(game_state_t *game) {
+    int winning_owner_index;
+    int winning_title_writer_index;
+
+    if (game == NULL) {
+        return false;
+    }
+
+    if (!round_finalize_winner(&game->current_round)) {
+        return false;
+    }
+
+    winning_owner_index = round_get_winning_entry_index(&game->current_round);
+    winning_title_writer_index =
+        round_get_winning_title_writer_index(&game->current_round);
+    if (winning_owner_index < 0 || winning_title_writer_index < 0) {
+        return false;
+    }
+
+    game->players[winning_title_writer_index].score += 100;
+    game->players[winning_owner_index].score += 25;
+    return true;
 }

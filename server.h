@@ -18,9 +18,21 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <time.h>
 
 #include "game.h"
 #include "protocol.h"
+
+typedef enum {
+    SERVER_PENDING_NONE = 0,
+    SERVER_PENDING_QUESTION_PROMPT,
+    SERVER_PENDING_TITLE_PROMPT,
+    SERVER_PENDING_VOTING_PROMPT,
+    SERVER_PENDING_ROUND_RESULTS,
+    SERVER_PENDING_SCOREBOARD,
+    SERVER_PENDING_FINAL_SCOREBOARD,
+    SERVER_PENDING_GAME_OVER
+} server_pending_action_t;
 
 typedef struct {
     int fd;
@@ -34,6 +46,8 @@ typedef struct {
     int listen_fd;
     int next_player_id;
     int active_clients;
+    time_t pending_action_at;
+    server_pending_action_t pending_action;
     game_state_t game;
     server_client_t clients[PROTOCOL_MAX_PLAYERS];
 } server_state_t;

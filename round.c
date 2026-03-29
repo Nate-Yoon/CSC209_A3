@@ -66,10 +66,16 @@ void round_state_reset(round_state_t *round) {
     round->submission_count = 0;
     round->rewrite_count = 0;
     round->vote_count = 0;
+    round->reveal_count = 0;
     round->submission_deadline = 0;
     round->rewrite_deadline = 0;
+    round->voting_deadline = 0;
+    round->winning_entry_index = ROUND_NO_ENTRY;
+    round->winning_title_writer_index = ROUND_NO_TARGET;
+    round->winning_vote_total = 0;
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        round->reveal_order[i] = ROUND_NO_ENTRY;
         round->vote_totals[i] = 0;
         round_reset_player_state(&round->players[i]);
     }
@@ -360,6 +366,56 @@ int round_apply_missing_rewrites(round_state_t *round) {
     return applied_count;
 }
 
+bool round_prepare_voting(round_state_t *round) {
+    int active_indices[PROTOCOL_MAX_PLAYERS];
+    int active_count;
+    int i;
+
+    if (round == NULL || !round->active || round->participant_count <= 0) {
+        return false;
+    }
+
+    active_count = 0;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (!round->players[i].active || !round->players[i].has_submitted) {
+            continue;
+        }
+
+        active_indices[active_count] = i;
+        active_count++;
+    }
+
+    if (active_count == 0) {
+        return false;
+    }
+
+    for (i = active_count; i > 1; i--) {
+        int swap_index = rand() % i;
+        int temp = active_indices[i - 1];
+        active_indices[i - 1] = active_indices[swap_index];
+        active_indices[swap_index] = temp;
+    }
+
+    round->reveal_count = active_count;
+    round->vote_count = 0;
+    round->winning_entry_index = ROUND_NO_ENTRY;
+    round->winning_title_writer_index = ROUND_NO_TARGET;
+    round->winning_vote_total = 0;
+
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        round->reveal_order[i] = ROUND_NO_ENTRY;
+        round->vote_totals[i] = 0;
+        round->players[i].has_voted = false;
+        round->players[i].voted_for_index = ROUND_NO_VOTE;
+    }
+
+    for (i = 0; i < active_count; i++) {
+        round->reveal_order[i] = active_indices[i];
+    }
+
+    return true;
+}
+
 bool round_record_vote(round_state_t *round,
                        size_t voter_index,
                        size_t target_index) {
@@ -376,7 +432,7 @@ bool round_record_vote(round_state_t *round,
         !voter_state->active ||
         !round->players[target_index].active ||
         voter_state->has_voted ||
-        voter_index == target_index) {
+        voter_state->rewrite_target_index == (int)target_index) {
         return false;
     }
 
@@ -385,6 +441,41 @@ bool round_record_vote(round_state_t *round,
     round->vote_totals[target_index]++;
     round->vote_count++;
     return true;
+}
+
+bool round_apply_missing_vote(round_state_t *round, size_t voter_index) {
+    round_player_state_t *voter_state;
+
+    if (round == NULL || voter_index >= PROTOCOL_MAX_PLAYERS) {
+        return false;
+    }
+
+    voter_state = &round->players[voter_index];
+    if (!round->active || !voter_state->active || voter_state->has_voted) {
+        return false;
+    }
+
+    voter_state->has_voted = true;
+    voter_state->voted_for_index = ROUND_NO_VOTE;
+    return true;
+}
+
+int round_apply_missing_votes(round_state_t *round) {
+    int applied_count;
+    size_t i;
+
+    if (round == NULL || !round->active) {
+        return 0;
+    }
+
+    applied_count = 0;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (round_apply_missing_vote(round, i)) {
+            applied_count++;
+        }
+    }
+
+    return applied_count;
 }
 
 void round_set_submission_deadline(round_state_t *round, time_t deadline) {
@@ -419,12 +510,44 @@ time_t round_get_rewrite_deadline(const round_state_t *round) {
     return round->rewrite_deadline;
 }
 
+void round_set_voting_deadline(round_state_t *round, time_t deadline) {
+    if (round == NULL) {
+        return;
+    }
+
+    round->voting_deadline = deadline;
+}
+
+time_t round_get_voting_deadline(const round_state_t *round) {
+    if (round == NULL) {
+        return 0;
+    }
+
+    return round->voting_deadline;
+}
+
 int round_get_rewrite_target_index(const round_state_t *round, size_t player_index) {
     if (round == NULL || player_index >= PROTOCOL_MAX_PLAYERS) {
         return ROUND_NO_TARGET;
     }
 
     return round->players[player_index].rewrite_target_index;
+}
+
+int round_get_reveal_count(const round_state_t *round) {
+    if (round == NULL) {
+        return 0;
+    }
+
+    return round->reveal_count;
+}
+
+int round_get_reveal_owner_at(const round_state_t *round, size_t reveal_index) {
+    if (round == NULL || reveal_index >= PROTOCOL_MAX_PLAYERS) {
+        return ROUND_NO_ENTRY;
+    }
+
+    return round->reveal_order[reveal_index];
 }
 
 const char *round_get_player_prompt(const round_state_t *round, size_t player_index) {
@@ -443,12 +566,12 @@ const char *round_get_player_submission(const round_state_t *round, size_t playe
     return round->players[player_index].submission;
 }
 
-const char *round_get_title_for_submission_owner(const round_state_t *round,
-                                                 size_t player_index) {
+int round_get_title_writer_for_submission_owner(const round_state_t *round,
+                                                size_t player_index) {
     size_t i;
 
     if (round == NULL || player_index >= PROTOCOL_MAX_PLAYERS) {
-        return NULL;
+        return ROUND_NO_TARGET;
     }
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
@@ -457,11 +580,90 @@ const char *round_get_title_for_submission_owner(const round_state_t *round,
         }
 
         if (round->players[i].rewrite_target_index == (int)player_index) {
-            return round->players[i].rewrite_text;
+            return (int)i;
         }
     }
 
-    return NULL;
+    return ROUND_NO_TARGET;
+}
+
+const char *round_get_title_for_submission_owner(const round_state_t *round,
+                                                 size_t player_index) {
+    int title_writer_index;
+
+    title_writer_index = round_get_title_writer_for_submission_owner(round, player_index);
+    if (title_writer_index < 0) {
+        return NULL;
+    }
+
+    return round->players[title_writer_index].rewrite_text;
+}
+
+bool round_finalize_winner(round_state_t *round) {
+    int best_targets[PROTOCOL_MAX_PLAYERS];
+    int best_count;
+    int best_vote_total;
+    int i;
+
+    if (round == NULL || !round->active || round->reveal_count <= 0) {
+        return false;
+    }
+
+    best_count = 0;
+    best_vote_total = -1;
+    for (i = 0; i < round->reveal_count; i++) {
+        int owner_index = round->reveal_order[i];
+        int owner_votes;
+
+        if (owner_index < 0) {
+            continue;
+        }
+
+        owner_votes = round->vote_totals[owner_index];
+        if (owner_votes > best_vote_total) {
+            best_vote_total = owner_votes;
+            best_targets[0] = owner_index;
+            best_count = 1;
+        } else if (owner_votes == best_vote_total) {
+            best_targets[best_count] = owner_index;
+            best_count++;
+        }
+    }
+
+    if (best_count <= 0) {
+        return false;
+    }
+
+    round->winning_entry_index = best_targets[rand() % best_count];
+    round->winning_title_writer_index =
+        round_get_title_writer_for_submission_owner(round,
+                                                    (size_t)round->winning_entry_index);
+    round->winning_vote_total = best_vote_total;
+    return round->winning_title_writer_index >= 0;
+}
+
+int round_get_winning_entry_index(const round_state_t *round) {
+    if (round == NULL) {
+        return ROUND_NO_ENTRY;
+    }
+
+    return round->winning_entry_index;
+}
+
+int round_get_winning_title_writer_index(const round_state_t *round) {
+    if (round == NULL) {
+        return ROUND_NO_TARGET;
+    }
+
+    return round->winning_title_writer_index;
+}
+
+int round_get_winning_vote_total(const round_state_t *round) {
+    if (round == NULL) {
+        return 0;
+    }
+
+    return round->winning_vote_total;
 }
 
 bool round_all_submitted(const round_state_t *round) {
