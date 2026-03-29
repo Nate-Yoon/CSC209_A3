@@ -12,14 +12,14 @@ static void game_view_send_player(const game_view_sink_t *sink,
                                   int player_id,
                                   const char *message);
 static void game_view_pause(const game_view_sink_t *sink);
+static void game_view_pause_voting_reveal(const game_view_sink_t *sink);
 static void game_view_format_stage_line(char *buffer,
                                         size_t buffer_size,
                                         const char *label);
 static const char *game_view_title_text(const char *title_text);
 static const char *game_view_round_name(round_category_t category);
 static const char *game_view_round_category_key(round_category_t category);
-static const char *game_view_round_submission_label(round_category_t category);
-static void game_view_broadcast_reveal_option(const game_view_sink_t *sink,
+static void game_view_broadcast_voting_option(const game_view_sink_t *sink,
                                               round_category_t category,
                                               int option_number,
                                               const char *submission_text,
@@ -169,12 +169,14 @@ void game_view_announce_voting_phase(const game_state_t *game,
         const char *title_text = game_get_reveal_title_at(game,
                                                           (size_t)(option_number - 1));
 
-        game_view_broadcast_reveal_option(sink,
+        game_view_broadcast_voting_option(sink,
                                           category,
                                           option_number,
                                           submission_text,
                                           title_text);
     }
+
+    game_view_broadcast(sink, "");
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         const game_player_t *player = game_get_player_at(game, i);
@@ -203,12 +205,14 @@ void game_view_broadcast_round_results(const game_state_t *game,
                                        const game_view_sink_t *sink) {
     const round_state_t *round;
     char line[PROTOCOL_LINE_BUFFER_SIZE];
-    int reveal_count;
-    int option_number;
     int winning_entry_index;
     int winning_title_writer_index;
+    int runner_up_entry_index;
+    int runner_up_title_writer_index;
     const game_player_t *winning_owner;
     const game_player_t *winning_title_writer;
+    const game_player_t *runner_up_owner;
+    const game_player_t *runner_up_title_writer;
 
     if (game == NULL) {
         return;
@@ -219,38 +223,40 @@ void game_view_broadcast_round_results(const game_state_t *game,
         return;
     }
 
-    game_view_broadcast(sink, "Here is what everyone came up with:");
-    game_view_pause(sink);
-
-    reveal_count = game_get_reveal_entry_count(game);
-    for (option_number = 1; option_number <= reveal_count; option_number++) {
-        const char *submission_text = game_get_reveal_submission_at(game,
-                                                                    (size_t)(option_number - 1));
-        const char *title_text = game_get_reveal_title_at(game,
-                                                          (size_t)(option_number - 1));
-
-        game_view_broadcast_reveal_option(sink,
-                                          round->category,
-                                          option_number,
-                                          submission_text,
-                                          title_text);
-    }
-
     winning_entry_index = round_get_winning_entry_index(round);
     winning_title_writer_index = round_get_winning_title_writer_index(round);
+    runner_up_entry_index = round_get_runner_up_entry_index(round);
+    runner_up_title_writer_index = round_get_runner_up_title_writer_index(round);
     winning_owner = game_get_player_at(game, (size_t)winning_entry_index);
     winning_title_writer = game_get_player_at(game, (size_t)winning_title_writer_index);
+    runner_up_owner = game_get_player_at(game, (size_t)runner_up_entry_index);
+    runner_up_title_writer = game_get_player_at(game, (size_t)runner_up_title_writer_index);
     if (winning_owner != NULL && winning_title_writer != NULL) {
         snprintf(line, sizeof(line), "Winning entry received %d vote(s).",
                  round_get_winning_vote_total(round));
         game_view_broadcast(sink, line);
         game_view_pause(sink);
-        snprintf(line, sizeof(line), "Best title by %s (+100)",
+        snprintf(line, sizeof(line), "First place title by %s (+100)",
                  winning_title_writer->username);
         game_view_broadcast(sink, line);
         game_view_pause(sink);
-        snprintf(line, sizeof(line), "Original answer by %s (+25)",
+        snprintf(line, sizeof(line), "First place answer by %s (+20)",
                  winning_owner->username);
+        game_view_broadcast(sink, line);
+        game_view_pause(sink);
+    }
+
+    if (runner_up_owner != NULL && runner_up_title_writer != NULL) {
+        snprintf(line, sizeof(line), "Second place received %d vote(s).",
+                 round_get_runner_up_vote_total(round));
+        game_view_broadcast(sink, line);
+        game_view_pause(sink);
+        snprintf(line, sizeof(line), "Second place title by %s (+50)",
+                 runner_up_title_writer->username);
+        game_view_broadcast(sink, line);
+        game_view_pause(sink);
+        snprintf(line, sizeof(line), "Second place answer by %s (+10)",
+                 runner_up_owner->username);
         game_view_broadcast(sink, line);
     }
 
@@ -396,6 +402,14 @@ static void game_view_pause(const game_view_sink_t *sink) {
     sink->pause_text_group(sink->context);
 }
 
+static void game_view_pause_voting_reveal(const game_view_sink_t *sink) {
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        game_view_pause(sink);
+    }
+}
+
 static void game_view_format_stage_line(char *buffer,
                                         size_t buffer_size,
                                         const char *label) {
@@ -466,51 +480,33 @@ static const char *game_view_round_category_key(round_category_t category) {
     }
 }
 
-static const char *game_view_round_submission_label(round_category_t category) {
-    switch (category) {
-        case ROUND_CATEGORY_CAPTIONS:
-            return "Post";
-        case ROUND_CATEGORY_REVIEWS:
-            return "Review";
-        case ROUND_CATEGORY_HEADLINES:
-        case ROUND_CATEGORY_FORUMS:
-        case ROUND_CATEGORY_NONE:
-        default:
-            return "Comment";
-    }
-}
-
-static void game_view_broadcast_reveal_option(const game_view_sink_t *sink,
+static void game_view_broadcast_voting_option(const game_view_sink_t *sink,
                                               round_category_t category,
                                               int option_number,
                                               const char *submission_text,
                                               const char *title_text) {
     char line[PROTOCOL_LINE_BUFFER_SIZE];
+    static const char separator[] = "----------------------------------------";
 
     game_view_broadcast(sink, "");
-    game_view_broadcast(sink, "----------------------------------------");
+    game_view_broadcast(sink, separator);
     snprintf(line, sizeof(line), "Option %d", option_number);
     game_view_broadcast(sink, line);
     if (game_view_reveal_twist_first(category)) {
         snprintf(line, sizeof(line), ">>> %s <<<",
                  game_view_title_text(title_text));
         game_view_broadcast(sink, line);
-        game_view_pause(sink);
-        snprintf(line, sizeof(line), "%s: %s",
-                 game_view_round_submission_label(category),
-                 submission_text != NULL ? submission_text : "");
-        game_view_broadcast(sink, line);
+        game_view_pause_voting_reveal(sink);
+        game_view_broadcast(sink, submission_text != NULL ? submission_text : "");
     } else {
-        snprintf(line, sizeof(line), "%s: %s",
-                 game_view_round_submission_label(category),
-                 submission_text != NULL ? submission_text : "");
-        game_view_broadcast(sink, line);
-        game_view_pause(sink);
+        game_view_broadcast(sink, submission_text != NULL ? submission_text : "");
+        game_view_pause_voting_reveal(sink);
         snprintf(line, sizeof(line), "# %s",
                  game_view_title_text(title_text));
         game_view_broadcast(sink, line);
     }
-    game_view_pause(sink);
+    game_view_broadcast(sink, separator);
+    game_view_pause_voting_reveal(sink);
 }
 
 static bool game_view_reveal_twist_first(round_category_t category) {

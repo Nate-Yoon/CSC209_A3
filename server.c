@@ -968,10 +968,11 @@ static void server_run_title_prompt_action(server_state_t *server,
 static void server_run_voting_prompt_action(server_state_t *server,
                                             game_view_sink_t *view,
                                             time_t now) {
+    (void)now;
     server->pending_action = SERVER_PENDING_NONE;
     server->pending_action_at = 0;
-    game_start_vote_window(&server->game, now);
     game_view_announce_voting_phase(&server->game, view);
+    game_start_vote_window(&server->game, time(NULL));
 }
 
 static void server_run_round_results_action(server_state_t *server,
@@ -1061,7 +1062,6 @@ static void server_handle_phase_change(server_state_t *server) {
     }
 
     if (server->game.phase == GAME_PHASE_RESULTS) {
-        game_view_broadcast_stage_banner(&view, "The Big Reveal");
         server_schedule_pending_action(server,
                                       SERVER_PENDING_ROUND_RESULTS,
                                       now + SERVER_STAGE_HOLD_SECONDS);
