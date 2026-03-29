@@ -4,7 +4,7 @@
  * Purpose:
  * Terminal client for the CSC209 A3 multiplayer game.
  * This client hides the plain-text wire protocol from the player by turning
- * normal terminal input into JOIN, READY, SUBMIT, and TITLE messages internally.
+ * normal terminal input into JOIN, READY, SUBMIT, TITLE, and VOTE messages internally.
  */
 
 #define _POSIX_C_SOURCE 200112L
@@ -34,6 +34,8 @@ typedef struct {
     bool ready_sent;
     bool awaiting_submission;
     bool awaiting_title;
+    bool awaiting_vote;
+    int vote_option_count;
 } client_state_t;
 
 static void client_print_usage(const char *program_name);
@@ -43,12 +45,14 @@ static int client_send_join(int fd, const char *username);
 static int client_send_ready(int fd);
 static int client_send_submission(int fd, const char *submission);
 static int client_send_title(int fd, const char *title_text);
+static int client_send_vote(int fd, int option_number);
 static int client_run_loop(int fd);
 static void client_state_init(client_state_t *state);
 static void client_print_username_prompt(void);
 static void client_print_ready_prompt(void);
 static void client_print_answer_prompt(void);
 static void client_print_title_prompt(void);
+static void client_print_vote_prompt(const client_state_t *state);
 static void client_break_prompt_line(const client_state_t *state);
 static int client_byte_is_allowed(unsigned char byte);
 static int client_handle_socket_data(const char *chunk,
@@ -162,6 +166,19 @@ static int client_send_title(int fd, const char *title_text) {
     return client_send_all(fd, message, (size_t)written);
 }
 
+static int client_send_vote(int fd, int option_number) {
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
+    int written;
+
+    written = snprintf(message, sizeof(message), "%s|%d\n",
+                       PROTOCOL_MSG_VOTE, option_number);
+    if (written < 0 || (size_t)written >= sizeof(message)) {
+        return -1;
+    }
+
+    return client_send_all(fd, message, (size_t)written);
+}
+
 static void client_state_init(client_state_t *state) {
     if (state == NULL) {
         return;
@@ -172,6 +189,8 @@ static void client_state_init(client_state_t *state) {
     state->ready_sent = false;
     state->awaiting_submission = false;
     state->awaiting_title = false;
+    state->awaiting_vote = false;
+    state->vote_option_count = 0;
 }
 
 static void client_print_username_prompt(void) {
@@ -194,12 +213,22 @@ static void client_print_title_prompt(void) {
     fflush(stdout);
 }
 
+static void client_print_vote_prompt(const client_state_t *state) {
+    if (state == NULL || state->vote_option_count <= 0) {
+        return;
+    }
+
+    printf("Vote for the funniest one by typing a number from 1 to %d: ",
+           state->vote_option_count);
+    fflush(stdout);
+}
+
 static void client_break_prompt_line(const client_state_t *state) {
     if (state == NULL) {
         return;
     }
 
-    if (state->awaiting_submission || state->awaiting_title) {
+    if (state->awaiting_submission || state->awaiting_title || state->awaiting_vote) {
         fputc('\n', stdout);
     }
 }
@@ -267,6 +296,8 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
     if (protocol_parse_prompt_text(line, prompt, sizeof(prompt))) {
         state->awaiting_submission = true;
         state->awaiting_title = false;
+        state->awaiting_vote = false;
+        state->vote_option_count = 0;
         puts("");
         printf("Give an answer to the following question in %d seconds:\n",
                PROTOCOL_SUBMISSION_TIMEOUT_SECONDS);
@@ -278,6 +309,8 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
     if (protocol_parse_title_text(line, prompt, sizeof(prompt))) {
         state->awaiting_submission = false;
         state->awaiting_title = true;
+        state->awaiting_vote = false;
+        state->vote_option_count = 0;
         puts("");
         printf("Give the following post a funny title in %d seconds:\n",
                PROTOCOL_TITLE_TIMEOUT_SECONDS);
@@ -286,8 +319,23 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         return 0;
     }
 
+    if (protocol_parse_vote_target(line, &player_id)) {
+        state->awaiting_submission = false;
+        state->awaiting_title = false;
+        state->awaiting_vote = true;
+        state->vote_option_count = player_id;
+        puts("");
+        printf("Voting is open for %d seconds.\n", PROTOCOL_VOTE_TIMEOUT_SECONDS);
+        client_print_vote_prompt(state);
+        return 0;
+    }
+
     if (protocol_parse_info_text(line, text, sizeof(text))) {
         client_break_prompt_line(state);
+        if (state->awaiting_vote) {
+            state->awaiting_vote = false;
+            state->vote_option_count = 0;
+        }
         puts(text);
         return 0;
     }
@@ -301,6 +349,8 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
             client_print_answer_prompt();
         } else if (state->awaiting_title) {
             client_print_title_prompt();
+        } else if (state->awaiting_vote) {
+            client_print_vote_prompt(state);
         } else if (!state->ready_sent) {
             client_print_ready_prompt();
         }
@@ -315,6 +365,8 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         client_break_prompt_line(state);
         state->awaiting_submission = false;
         state->awaiting_title = false;
+        state->awaiting_vote = false;
+        state->vote_option_count = 0;
         printf("%s posted: %s\n", username, submission);
         return 0;
     }
@@ -323,6 +375,8 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         client_break_prompt_line(state);
         state->awaiting_submission = false;
         state->awaiting_title = false;
+        state->awaiting_vote = false;
+        state->vote_option_count = 0;
         printf("Round winner: %s\n", username);
         return 0;
     }
@@ -343,6 +397,8 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
             client_print_answer_prompt();
         } else if (state->awaiting_title) {
             client_print_title_prompt();
+        } else if (state->awaiting_vote) {
+            client_print_vote_prompt(state);
         } else if (!state->ready_sent) {
             client_print_ready_prompt();
         }
@@ -399,6 +455,29 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
 
         state->awaiting_title = false;
         puts("Title sent. Waiting for the rest of the players...");
+        return 0;
+    }
+
+    if (state->awaiting_vote) {
+        char *endptr;
+        long option_number;
+
+        option_number = strtol(line, &endptr, 10);
+        if (endptr == line || *endptr != '\0' ||
+            option_number < 1 || option_number > state->vote_option_count) {
+            printf("Votes must be a number from 1 to %d.\n",
+                   state->vote_option_count);
+            client_print_vote_prompt(state);
+            return 0;
+        }
+
+        if (client_send_vote(fd, (int)option_number) != 0) {
+            perror("client: send");
+            return 1;
+        }
+
+        state->awaiting_vote = false;
+        puts("Vote sent. Waiting for the rest of the players...");
         return 0;
     }
 

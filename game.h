@@ -17,6 +17,10 @@
 #include "protocol.h"
 #include "round.h"
 
+enum {
+    GAME_TOTAL_ROUNDS = 4
+};
+
 typedef enum {
     GAME_PHASE_LOBBY = 0,
     GAME_PHASE_PROMPT,
@@ -80,17 +84,24 @@ bool game_advance_phase_if_ready(game_state_t *game);
 bool game_finish_round(game_state_t *game);
 void game_end(game_state_t *game);
 void game_handle_disconnect(game_state_t *game, int player_id);
+void game_start_prompt_window(game_state_t *game, time_t now);
+void game_start_title_window(game_state_t *game, time_t now);
+void game_start_vote_window(game_state_t *game, time_t now);
 time_t game_get_phase_deadline(const game_state_t *game);
 int game_apply_phase_timeout(game_state_t *game, time_t now);
+bool game_is_final_round(const game_state_t *game);
 const game_player_t *game_get_player(const game_state_t *game, int player_id);
 const game_player_t *game_get_player_at(const game_state_t *game, size_t player_index);
 const round_state_t *game_get_current_round(const game_state_t *game);
 const char *game_get_player_prompt(const game_state_t *game, int player_id);
 const char *game_get_player_rewrite_prompt(const game_state_t *game, int player_id);
 const char *game_get_player_rewrite_submission(const game_state_t *game, int player_id);
-bool game_pick_round_winner(const game_state_t *game,
-                            char *username_out,
-                            size_t username_out_size);
+int game_get_reveal_entry_count(const game_state_t *game);
+const char *game_get_reveal_prompt_at(const game_state_t *game, size_t reveal_index);
+const char *game_get_reveal_submission_at(const game_state_t *game, size_t reveal_index);
+const char *game_get_reveal_title_at(const game_state_t *game, size_t reveal_index);
+int game_get_vote_target_player_id_at(const game_state_t *game, int option_number);
+int game_get_player_forbidden_vote_option(const game_state_t *game, int player_id);
 const char *game_action_result_message(game_action_result_t result);
 
 #endif
