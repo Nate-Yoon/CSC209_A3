@@ -31,6 +31,7 @@ enum {
 typedef struct {
     int player_id;
     bool joined;
+    bool join_requested;
     bool ready_sent;
     bool awaiting_submission;
     bool awaiting_title;
@@ -48,6 +49,7 @@ static int client_send_title(int fd, const char *title_text);
 static int client_send_vote(int fd, int option_number);
 static int client_run_loop(int fd);
 static void client_state_init(client_state_t *state);
+static void client_print_join_prompt(void);
 static void client_print_username_prompt(void);
 static void client_print_ready_prompt(void);
 static void client_print_answer_prompt(void);
@@ -186,6 +188,7 @@ static void client_state_init(client_state_t *state) {
 
     state->player_id = 0;
     state->joined = false;
+    state->join_requested = false;
     state->ready_sent = false;
     state->awaiting_submission = false;
     state->awaiting_title = false;
@@ -193,13 +196,18 @@ static void client_state_init(client_state_t *state) {
     state->vote_option_count = 0;
 }
 
+static void client_print_join_prompt(void) {
+    fputs("Welcome to Survive The Internet, type \"JOIN\" to join the game: ", stdout);
+    fflush(stdout);
+}
+
 static void client_print_username_prompt(void) {
-    fputs("Username: ", stdout);
+    fputs("Enter your alphanumeric username: ", stdout);
     fflush(stdout);
 }
 
 static void client_print_ready_prompt(void) {
-    fputs("Type ready and press Enter when you're ready: ", stdout);
+    fputs("Type \"READY\" to signal that you are ready to start the game: ", stdout);
     fflush(stdout);
 }
 
@@ -287,6 +295,7 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
 
     if (protocol_parse_welcome_id(line, &player_id)) {
         state->joined = true;
+        state->join_requested = false;
         state->player_id = player_id;
         puts("Joined the lobby.");
         client_print_ready_prompt();
@@ -344,7 +353,11 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         client_break_prompt_line(state);
         printf("Error: %s\n", text);
         if (!state->joined) {
-            client_print_username_prompt();
+            if (!state->join_requested) {
+                client_print_join_prompt();
+            } else {
+                client_print_username_prompt();
+            }
         } else if (state->awaiting_submission) {
             client_print_answer_prompt();
         } else if (state->awaiting_title) {
@@ -392,7 +405,11 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
 
     if (line[0] == '\0') {
         if (!state->joined) {
-            client_print_username_prompt();
+            if (!state->join_requested) {
+                client_print_join_prompt();
+            } else {
+                client_print_username_prompt();
+            }
         } else if (state->awaiting_submission) {
             client_print_answer_prompt();
         } else if (state->awaiting_title) {
@@ -406,6 +423,18 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
     }
 
     if (!state->joined) {
+        if (!state->join_requested) {
+            if (strcmp(line, "JOIN") != 0) {
+                puts("Type \"JOIN\" to enter the game.");
+                client_print_join_prompt();
+                return 0;
+            }
+
+            state->join_requested = true;
+            client_print_username_prompt();
+            return 0;
+        }
+
         if (!protocol_username_is_valid(line)) {
             printf("Username must be 1-%d alphanumeric characters.\n",
                    PROTOCOL_MAX_USERNAME_LEN);
@@ -482,8 +511,8 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
     }
 
     if (!state->ready_sent) {
-        if (strcmp(line, "ready") != 0) {
-            puts("Type ready when you want to mark yourself ready.");
+        if (strcmp(line, "READY") != 0) {
+            puts("Type \"READY\" when you want to mark yourself ready.");
             client_print_ready_prompt();
             return 0;
         }
@@ -528,7 +557,7 @@ static int client_run_loop(int fd) {
     stdin_open = 1;
     client_state_init(&state);
 
-    client_print_username_prompt();
+    client_print_join_prompt();
 
     for (;;) {
         fd_set read_fds;
