@@ -472,7 +472,7 @@ Write a brief review of the last meal you ate.
 Meh. The eggs were a little runny.
 Briefly describe your favorite amusement park.
 It’s huge and full of great rides.
-Write a brief review of the underwear your’re currently wearing.
+Write a brief review of the underwear you’re currently wearing.
 They’re very flexible and comfortable.
 Write a brief review of your bath mat.
 It’s ok. It doesn’t dry very quickly.
@@ -573,7 +573,7 @@ I love positive people!
 What are your thoughts on professional wrestling?
 It’s all so fake.
 How’s your retirement fund doing?
-It’s nonexistant!
+It’s nonexistent!
 What’s one of your all-time favorite TV quotes?
 Did I do that?
 What’s a nice thing you could say about the person closest to you right now?
