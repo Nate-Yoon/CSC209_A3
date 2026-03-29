@@ -423,8 +423,8 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
     }
 
     if (state->awaiting_submission) {
-        if (!protocol_submission_is_valid(line)) {
-            printf("Answers must be 1-%d printable characters and cannot include '|'.\n",
+        if (!protocol_player_text_is_valid(line, PROTOCOL_MAX_SUBMISSION_LEN)) {
+            printf("Answers must be 1-%d letters or numbers only.\n",
                    PROTOCOL_MAX_SUBMISSION_LEN);
             client_print_answer_prompt();
             return 0;
@@ -441,8 +441,8 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
     }
 
     if (state->awaiting_title) {
-        if (!protocol_submission_is_valid(line)) {
-            printf("Titles must be 1-%d printable characters and cannot include '|'.\n",
+        if (!protocol_player_text_is_valid(line, PROTOCOL_MAX_SUBMISSION_LEN)) {
+            printf("Titles must be 1-%d letters or numbers only.\n",
                    PROTOCOL_MAX_SUBMISSION_LEN);
             client_print_title_prompt();
             return 0;

@@ -31,6 +31,8 @@ static int protocol_checked_snprintf(char *buffer,
                                      size_t buffer_size,
                                      const char *format,
                                      ...);
+static bool protocol_text_is_alnum_only(const char *text, size_t max_len);
+static bool protocol_text_is_alnum_space_only(const char *text, size_t max_len);
 
 protocol_message_type_t protocol_identify_message(const char *line) {
     if (line == NULL) {
@@ -208,27 +210,11 @@ bool protocol_parse_winner_username(const char *line,
 }
 
 bool protocol_username_is_valid(const char *username) {
-    size_t i;
-    size_t username_len;
+    return protocol_text_is_alnum_only(username, PROTOCOL_MAX_USERNAME_LEN);
+}
 
-    if (username == NULL) {
-        return false;
-    }
-
-    username_len = strlen(username);
-    if (username_len == 0 || username_len > PROTOCOL_MAX_USERNAME_LEN) {
-        return false;
-    }
-
-    for (i = 0; i < username_len; i++) {
-        unsigned char byte = (unsigned char)username[i];
-
-        if (!isalnum(byte)) {
-            return false;
-        }
-    }
-
-    return true;
+bool protocol_player_text_is_valid(const char *text, size_t max_len) {
+    return protocol_text_is_alnum_space_only(text, max_len);
 }
 
 bool protocol_submission_is_valid(const char *submission) {
@@ -248,6 +234,54 @@ bool protocol_submission_is_valid(const char *submission) {
         unsigned char byte = (unsigned char)submission[i];
 
         if (byte < 32 || byte > 126 || byte == '|') {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool protocol_text_is_alnum_only(const char *text, size_t max_len) {
+    size_t i;
+    size_t text_len;
+
+    if (text == NULL) {
+        return false;
+    }
+
+    text_len = strlen(text);
+    if (text_len == 0 || text_len > max_len) {
+        return false;
+    }
+
+    for (i = 0; i < text_len; i++) {
+        unsigned char byte = (unsigned char)text[i];
+
+        if (!isalnum(byte)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool protocol_text_is_alnum_space_only(const char *text, size_t max_len) {
+    size_t i;
+    size_t text_len;
+
+    if (text == NULL) {
+        return false;
+    }
+
+    text_len = strlen(text);
+    if (text_len == 0 || text_len > max_len) {
+        return false;
+    }
+
+    for (i = 0; i < text_len; i++) {
+        unsigned char byte = (unsigned char)text[i];
+
+        if (!isalnum(byte) && byte != ' ') {
             return false;
         }
     }

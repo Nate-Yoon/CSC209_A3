@@ -532,8 +532,8 @@ static int server_handle_join_line(server_state_t *server,
     }
 
     if (!protocol_username_is_valid(username)) {
-        return server_send_error_and_close(server, client_index,
-                                           "invalid username");
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid username\n");
+        return 0;
     }
 
     player_id = client->player_id;
@@ -553,8 +553,9 @@ static int server_handle_join_line(server_state_t *server,
                                                "game already started");
         }
 
-        return server_send_error_and_close(server, client_index,
-                                           game_action_result_message(result));
+        server_send_to_client(client,
+                              PROTOCOL_MSG_ERROR "|invalid username\n");
+        return 0;
     }
 
     if (client->player_id == 0) {
@@ -658,7 +659,7 @@ static int server_handle_submit_line(server_state_t *server,
         return 0;
     }
 
-    if (!protocol_submission_is_valid(submission)) {
+    if (!protocol_player_text_is_valid(submission, PROTOCOL_MAX_SUBMISSION_LEN)) {
         server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid submission\n");
         return 0;
     }
@@ -725,7 +726,7 @@ static int server_handle_title_line(server_state_t *server,
         return 0;
     }
 
-    if (!protocol_submission_is_valid(title_text)) {
+    if (!protocol_player_text_is_valid(title_text, PROTOCOL_MAX_SUBMISSION_LEN)) {
         server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid title\n");
         return 0;
     }

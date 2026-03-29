@@ -82,6 +82,7 @@ bool protocol_parse_winner_username(const char *line,
                                     char *username_out,
                                     size_t username_out_size);
 bool protocol_username_is_valid(const char *username);
+bool protocol_player_text_is_valid(const char *text, size_t max_len);
 bool protocol_submission_is_valid(const char *submission);
 int protocol_format_welcome(char *buffer, size_t buffer_size, int player_id);
 int protocol_format_error(char *buffer, size_t buffer_size, const char *reason);
