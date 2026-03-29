@@ -36,7 +36,7 @@ static bool round_load_prompt_pairs(const char *file_path,
                                     round_category_t category,
                                     round_prompt_pair_t **pairs_out,
                                     size_t *pair_count_out);
-static bool round_prompt_bank_text_is_valid(const char *text);
+static bool round_prompt_text_is_valid(const char *text);
 static round_content_result_t round_read_next_content_line(FILE *file,
                                                            char *buffer,
                                                            size_t buffer_size,
@@ -982,6 +982,14 @@ static bool round_load_prompt_pairs(const char *file_path,
                                            "prompt exceeds the maximum allowed prompt length");
         }
 
+        if (!round_prompt_text_is_valid(prompt_buffer)) {
+            free(pairs);
+            fclose(file);
+            return round_report_load_error(file_path,
+                                           line_number - 1,
+                                           "prompt contains invalid non-ASCII or protocol characters");
+        }
+
         if (strlen(fallback_buffer) > PROTOCOL_MAX_SUBMISSION_LEN) {
             free(pairs);
             fclose(file);
@@ -990,7 +998,7 @@ static bool round_load_prompt_pairs(const char *file_path,
                                            "fallback answer exceeds the maximum allowed submission length");
         }
 
-        if (!round_prompt_bank_text_is_valid(fallback_buffer)) {
+        if (!protocol_submission_is_valid(fallback_buffer)) {
             free(pairs);
             fclose(file);
             return round_report_load_error(file_path,
@@ -1047,7 +1055,7 @@ static bool round_load_prompt_pairs(const char *file_path,
     return true;
 }
 
-static bool round_prompt_bank_text_is_valid(const char *text) {
+static bool round_prompt_text_is_valid(const char *text) {
     size_t i;
 
     if (text == NULL || text[0] == '\0') {
@@ -1057,7 +1065,7 @@ static bool round_prompt_bank_text_is_valid(const char *text) {
     for (i = 0; text[i] != '\0'; i++) {
         unsigned char byte = (unsigned char)text[i];
 
-        if (byte < 32 || byte == '|') {
+        if (byte < 32 || byte > 126 || byte == '|') {
             return false;
         }
     }

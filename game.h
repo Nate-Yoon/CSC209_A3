@@ -18,7 +18,9 @@
 #include "round.h"
 
 enum {
-    GAME_TOTAL_ROUNDS = 4
+    GAME_TOTAL_ROUNDS = 4,
+    GAME_FIRST_TITLE_POINTS = 100,
+    GAME_FIRST_ANSWER_POINTS = 20
 };
 
 typedef enum {

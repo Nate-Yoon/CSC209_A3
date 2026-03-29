@@ -236,12 +236,14 @@ void game_view_broadcast_round_results(const game_state_t *game,
                  round_get_winning_vote_total(round));
         game_view_broadcast(sink, line);
         game_view_pause(sink);
-        snprintf(line, sizeof(line), "First place title by %s (+100)",
-                 winning_title_writer->username);
+        snprintf(line, sizeof(line), "First place title by %s (+%d)",
+                 winning_title_writer->username,
+                 GAME_FIRST_TITLE_POINTS);
         game_view_broadcast(sink, line);
         game_view_pause(sink);
-        snprintf(line, sizeof(line), "First place answer by %s (+20)",
-                 winning_owner->username);
+        snprintf(line, sizeof(line), "First place answer by %s (+%d)",
+                 winning_owner->username,
+                 GAME_FIRST_ANSWER_POINTS);
         game_view_broadcast(sink, line);
         game_view_pause(sink);
     }
@@ -251,12 +253,14 @@ void game_view_broadcast_round_results(const game_state_t *game,
                  round_get_runner_up_vote_total(round));
         game_view_broadcast(sink, line);
         game_view_pause(sink);
-        snprintf(line, sizeof(line), "Second place title by %s (+50)",
-                 runner_up_title_writer->username);
+        snprintf(line, sizeof(line), "Second place title by %s (+%d)",
+                 runner_up_title_writer->username,
+                 GAME_FIRST_TITLE_POINTS / 2);
         game_view_broadcast(sink, line);
         game_view_pause(sink);
-        snprintf(line, sizeof(line), "Second place answer by %s (+10)",
-                 runner_up_owner->username);
+        snprintf(line, sizeof(line), "Second place answer by %s (+%d)",
+                 runner_up_owner->username,
+                 GAME_FIRST_ANSWER_POINTS / 2);
         game_view_broadcast(sink, line);
     }
 

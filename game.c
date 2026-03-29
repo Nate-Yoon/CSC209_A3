@@ -855,10 +855,6 @@ static int game_get_reveal_owner_index_at(const game_state_t *game, size_t revea
 }
 
 static bool game_apply_round_scores(game_state_t *game) {
-    enum {
-        first_title_points = 100,
-        first_answer_points = 20
-    };
     int winning_owner_index;
     int winning_title_writer_index;
     int runner_up_owner_index;
@@ -879,15 +875,15 @@ static bool game_apply_round_scores(game_state_t *game) {
         return false;
     }
 
-    game->players[winning_title_writer_index].score += first_title_points;
-    game->players[winning_owner_index].score += first_answer_points;
+    game->players[winning_title_writer_index].score += GAME_FIRST_TITLE_POINTS;
+    game->players[winning_owner_index].score += GAME_FIRST_ANSWER_POINTS;
 
     runner_up_owner_index = round_get_runner_up_entry_index(&game->current_round);
     runner_up_title_writer_index =
         round_get_runner_up_title_writer_index(&game->current_round);
     if (runner_up_owner_index >= 0 && runner_up_title_writer_index >= 0) {
-        game->players[runner_up_title_writer_index].score += first_title_points / 2;
-        game->players[runner_up_owner_index].score += first_answer_points / 2;
+        game->players[runner_up_title_writer_index].score += GAME_FIRST_TITLE_POINTS / 2;
+        game->players[runner_up_owner_index].score += GAME_FIRST_ANSWER_POINTS / 2;
     }
 
     return true;

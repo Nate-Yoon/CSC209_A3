@@ -968,11 +968,14 @@ static void server_run_title_prompt_action(server_state_t *server,
 static void server_run_voting_prompt_action(server_state_t *server,
                                             game_view_sink_t *view,
                                             time_t now) {
+    time_t start_time;
+
     (void)now;
     server->pending_action = SERVER_PENDING_NONE;
     server->pending_action_at = 0;
     game_view_announce_voting_phase(&server->game, view);
-    game_start_vote_window(&server->game, time(NULL));
+    start_time = time(NULL);
+    game_start_vote_window(&server->game, start_time);
 }
 
 static void server_run_round_results_action(server_state_t *server,

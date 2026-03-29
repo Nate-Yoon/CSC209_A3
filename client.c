@@ -53,7 +53,7 @@ static void client_state_init(client_state_t *state);
 static void client_print_username_prompt(void);
 static void client_print_ready_prompt(void);
 static void client_print_answer_prompt(void);
-static const char *client_title_phase_intro(const client_state_t *state);
+static void client_print_title_phase_intro(const client_state_t *state);
 static const char *client_title_input_prompt(const client_state_t *state);
 static void client_print_title_prompt(const client_state_t *state);
 static void client_print_vote_prompt(const client_state_t *state);
@@ -210,21 +210,22 @@ static void client_print_answer_prompt(void) {
     fflush(stdout);
 }
 
-static const char *client_title_phase_intro(const client_state_t *state) {
+static void client_print_title_phase_intro(const client_state_t *state) {
+    const char *format;
+
     if (strcmp(state->title_category, "headlines") == 0) {
-        return "Write a funny news headline for the following comment in 60 seconds:";
-    }
-    if (strcmp(state->title_category, "captions") == 0) {
-        return "Write a caption / hashtag for the following post in 60 seconds:";
-    }
-    if (strcmp(state->title_category, "reviews") == 0) {
-        return "Write the product, service, or place being reviewed in 60 seconds:";
-    }
-    if (strcmp(state->title_category, "forums") == 0) {
-        return "Write a forum thread title / YouTube title for the following comment in 60 seconds:";
+        format = "Write a funny news headline for the following comment in %d seconds:\n";
+    } else if (strcmp(state->title_category, "captions") == 0) {
+        format = "Write a caption / hashtag for the following post in %d seconds:\n";
+    } else if (strcmp(state->title_category, "reviews") == 0) {
+        format = "Write the product, service, or place being reviewed in %d seconds:\n";
+    } else if (strcmp(state->title_category, "forums") == 0) {
+        format = "Write a forum thread title / YouTube title for the following comment in %d seconds:\n";
+    } else {
+        format = "Give the following post a funny title in %d seconds:\n";
     }
 
-    return "Give the following post a funny title in 60 seconds:";
+    printf(format, PROTOCOL_TITLE_TIMEOUT_SECONDS);
 }
 
 static const char *client_title_input_prompt(const client_state_t *state) {
@@ -271,7 +272,7 @@ static int client_byte_is_allowed(unsigned char byte) {
         return 1;
     }
 
-    return byte >= 32;
+    return byte >= 32 && byte <= 126;
 }
 
 static int client_handle_socket_data(const char *chunk,
@@ -352,7 +353,7 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         state->awaiting_vote = false;
         state->prompt_line_active = false;
         state->vote_option_count = 0;
-        puts(client_title_phase_intro(state));
+        client_print_title_phase_intro(state);
         puts(prompt);
         client_print_title_prompt(state);
         state->prompt_line_active = true;
@@ -366,7 +367,7 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         state->prompt_line_active = false;
         state->vote_option_count = 0;
         strcpy(state->title_category, "generic");
-        puts(client_title_phase_intro(state));
+        client_print_title_phase_intro(state);
         puts(prompt);
         client_print_title_prompt(state);
         state->prompt_line_active = true;
