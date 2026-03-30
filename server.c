@@ -109,12 +109,15 @@ static const game_player_t *server_get_client_player(const server_state_t *serve
                                                      size_t client_index);
 static bool server_client_has_joined(const server_client_t *client);
 static int server_send_to_client(const server_client_t *client, const char *message);
+static int server_send_to_client_slot(server_state_t *server,
+                                      size_t client_index,
+                                      const char *message);
 static int server_send_error_and_close(server_state_t *server,
                                        size_t client_index,
                                        const char *reason);
-static int server_broadcast_message(const server_state_t *server,
+static int server_broadcast_message(server_state_t *server,
                                     const char *message);
-static int server_broadcast_info(const server_state_t *server, const char *text);
+static int server_broadcast_info(server_state_t *server, const char *text);
 static void server_seed_rng_once(void);
 static void server_print_usage(const char *program_name);
 static void server_ignore_sigpipe(void);
@@ -502,9 +505,9 @@ static int server_handle_client_line(server_state_t *server,
         case PROTOCOL_TYPE_VOTE:
             return server_handle_vote_line(server, client_index, line);
         default:
-            if (server_send_to_client(&server->clients[client_index],
-                                      PROTOCOL_MSG_ERROR "|unsupported message\n") != 0) {
-                server_remove_client(server, client_index, "send failure");
+            if (server_send_to_client_slot(server,
+                                           client_index,
+                                           PROTOCOL_MSG_ERROR "|unsupported message\n") != 0) {
                 return -1;
             }
             fprintf(stderr, "server: unsupported message from slot %zu: %s",
@@ -544,8 +547,9 @@ static int server_handle_join_line(server_state_t *server,
     result = game_handle_join(&server->game, player_id, username);
     if (result != GAME_ACTION_OK) {
         if (result == GAME_ACTION_ALREADY_JOINED) {
-            server_send_to_client(client, PROTOCOL_MSG_ERROR "|already joined\n");
-            return 0;
+            return server_send_to_client_slot(server,
+                                              client_index,
+                                              PROTOCOL_MSG_ERROR "|already joined\n");
         }
 
         if (result == GAME_ACTION_INVALID_STATE) {
@@ -569,8 +573,7 @@ static int server_handle_join_line(server_state_t *server,
     }
 
     if (protocol_format_welcome(message, sizeof(message), client->player_id) >= 0) {
-        if (server_send_to_client(client, message) != 0) {
-            server_remove_client(server, client_index, "send failure");
+        if (server_send_to_client_slot(server, client_index, message) != 0) {
             return -1;
         }
     }
@@ -599,24 +602,28 @@ static int server_handle_ready_line(server_state_t *server,
 
     client = &server->clients[client_index];
     if (!server_client_has_joined(client)) {
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|join first\n");
     }
 
     result = game_handle_ready(&server->game, client->player_id);
     if (result != GAME_ACTION_OK) {
         if (result == GAME_ACTION_ALREADY_READY) {
-            server_send_to_client(client, PROTOCOL_MSG_ERROR "|already ready\n");
-            return 0;
+            return server_send_to_client_slot(server,
+                                              client_index,
+                                              PROTOCOL_MSG_ERROR "|already ready\n");
         }
 
         if (result == GAME_ACTION_INVALID_STATE) {
-            server_send_to_client(client, PROTOCOL_MSG_ERROR "|game already started\n");
-            return 0;
+            return server_send_to_client_slot(server,
+                                              client_index,
+                                              PROTOCOL_MSG_ERROR "|game already started\n");
         }
 
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|join first\n");
     }
 
     player = server_get_client_player(server, client_index);
@@ -647,35 +654,40 @@ static int server_handle_submit_line(server_state_t *server,
     client = &server->clients[client_index];
 
     if (!server_client_has_joined(client)) {
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|join first\n");
     }
 
     if (!protocol_parse_submit_text(line, submission, sizeof(submission))) {
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid SUBMIT format\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|invalid SUBMIT format\n");
     }
 
     if (!protocol_submission_is_valid(submission)) {
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid submission\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|invalid submission\n");
     }
 
     result = game_handle_submit(&server->game, client->player_id, submission);
     if (result != GAME_ACTION_OK) {
         if (result == GAME_ACTION_INVALID_STATE) {
-            server_send_to_client(client,
-                                  PROTOCOL_MSG_ERROR "|not accepting submissions\n");
-            return 0;
+            return server_send_to_client_slot(server,
+                                              client_index,
+                                              PROTOCOL_MSG_ERROR "|not accepting submissions\n");
         }
 
         if (result == GAME_ACTION_ALREADY_SUBMITTED) {
-            server_send_to_client(client, PROTOCOL_MSG_ERROR "|submission rejected\n");
-            return 0;
+            return server_send_to_client_slot(server,
+                                              client_index,
+                                              PROTOCOL_MSG_ERROR "|submission rejected\n");
         }
 
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|join first\n");
     }
 
     player = server_get_client_player(server, client_index);
@@ -702,34 +714,40 @@ static int server_handle_title_line(server_state_t *server,
     client = &server->clients[client_index];
 
     if (!server_client_has_joined(client)) {
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|join first\n");
     }
 
     if (!protocol_parse_title_text(line, title_text, sizeof(title_text))) {
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid TITLE format\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|invalid TITLE format\n");
     }
 
     if (!protocol_submission_is_valid(title_text)) {
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid title\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|invalid title\n");
     }
 
     result = game_handle_rewrite(&server->game, client->player_id, title_text);
     if (result != GAME_ACTION_OK) {
         if (result == GAME_ACTION_INVALID_STATE) {
-            server_send_to_client(client, PROTOCOL_MSG_ERROR "|not accepting titles\n");
-            return 0;
+            return server_send_to_client_slot(server,
+                                              client_index,
+                                              PROTOCOL_MSG_ERROR "|not accepting titles\n");
         }
 
         if (result == GAME_ACTION_ALREADY_REWRITTEN) {
-            server_send_to_client(client, PROTOCOL_MSG_ERROR "|title rejected\n");
-            return 0;
+            return server_send_to_client_slot(server,
+                                              client_index,
+                                              PROTOCOL_MSG_ERROR "|title rejected\n");
         }
 
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|join first\n");
     }
 
     player = server_get_client_player(server, client_index);
@@ -757,41 +775,47 @@ static int server_handle_vote_line(server_state_t *server,
     client = &server->clients[client_index];
 
     if (!server_client_has_joined(client)) {
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|join first\n");
     }
 
     if (!protocol_parse_vote_target(line, &option_number)) {
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid vote format\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|invalid vote format\n");
     }
 
     target_player_id = game_get_vote_target_player_id_at(&server->game, option_number);
     if (target_player_id <= 0) {
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|choose a valid vote option\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|choose a valid vote option\n");
     }
 
     result = game_handle_vote(&server->game, client->player_id, target_player_id);
     if (result != GAME_ACTION_OK) {
         if (result == GAME_ACTION_INVALID_STATE) {
-            server_send_to_client(client, PROTOCOL_MSG_ERROR "|not accepting votes\n");
-            return 0;
+            return server_send_to_client_slot(server,
+                                              client_index,
+                                              PROTOCOL_MSG_ERROR "|not accepting votes\n");
         }
 
         if (result == GAME_ACTION_ALREADY_VOTED) {
-            server_send_to_client(client, PROTOCOL_MSG_ERROR "|vote rejected\n");
-            return 0;
+            return server_send_to_client_slot(server,
+                                              client_index,
+                                              PROTOCOL_MSG_ERROR "|vote rejected\n");
         }
 
         if (result == GAME_ACTION_INVALID_VOTE_TARGET) {
-            server_send_to_client(client,
-                                  PROTOCOL_MSG_ERROR "|you cannot vote for the entry you titled\n");
-            return 0;
+            return server_send_to_client_slot(server,
+                                              client_index,
+                                              PROTOCOL_MSG_ERROR "|you cannot vote for the entry you titled\n");
         }
 
-        server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
-        return 0;
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|join first\n");
     }
 
     player = server_get_client_player(server, client_index);
@@ -1091,9 +1115,7 @@ static void server_view_send_to_player(void *context,
         return;
     }
 
-    if (server_send_to_client(&server->clients[client_index], message) != 0) {
-        server_remove_client(server, (size_t)client_index, "send failure");
-    }
+    (void)server_send_to_client_slot(server, (size_t)client_index, message);
 }
 
 static void server_view_broadcast_info(void *context, const char *text) {
@@ -1189,6 +1211,17 @@ static int server_send_to_client(const server_client_t *client, const char *mess
     return 0;
 }
 
+static int server_send_to_client_slot(server_state_t *server,
+                                      size_t client_index,
+                                      const char *message) {
+    if (server_send_to_client(&server->clients[client_index], message) != 0) {
+        server_remove_client(server, client_index, "send failure");
+        return -1;
+    }
+
+    return 0;
+}
+
 static int server_send_error_and_close(server_state_t *server,
                                        size_t client_index,
                                        const char *reason) {
@@ -1202,14 +1235,17 @@ static int server_send_error_and_close(server_state_t *server,
     return -1;
 }
 
-static int server_broadcast_message(const server_state_t *server,
+static int server_broadcast_message(server_state_t *server,
                                     const char *message) {
+    size_t failed_indices[PROTOCOL_MAX_PLAYERS];
+    size_t failed_count;
     size_t i;
 
     if (server == NULL || message == NULL) {
         return -1;
     }
 
+    failed_count = 0;
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         if (!server->clients[i].active || !server_client_has_joined(&server->clients[i])) {
             continue;
@@ -1217,13 +1253,23 @@ static int server_broadcast_message(const server_state_t *server,
 
         if (server_send_to_client(&server->clients[i], message) != 0) {
             fprintf(stderr, "server: failed sending broadcast to slot %zu\n", i);
+            failed_indices[failed_count] = i;
+            failed_count++;
+        }
+    }
+
+    for (i = 0; i < failed_count; i++) {
+        size_t client_index = failed_indices[i];
+
+        if (server->clients[client_index].active) {
+            server_remove_client(server, client_index, "send failure");
         }
     }
 
     return 0;
 }
 
-static int server_broadcast_info(const server_state_t *server, const char *text) {
+static int server_broadcast_info(server_state_t *server, const char *text) {
     char message[PROTOCOL_LINE_BUFFER_SIZE];
 
     if (protocol_format_info(message, sizeof(message), text) < 0) {
