@@ -16,6 +16,7 @@
 #include "game_view.h"
 #include "server.h"
 
+#include <fcntl.h>
 #include <errno.h>
 #include <netdb.h>
 #include <signal.h>
@@ -48,7 +49,10 @@ static ssize_t server_find_free_slot(const server_state_t *server);
 static void server_remove_client(server_state_t *server,
                                  size_t client_index,
                                  const char *reason);
+static int server_set_nonblocking(int fd);
 static void server_handle_client_readable(server_state_t *server,
+                                          size_t client_index);
+static void server_handle_client_writable(server_state_t *server,
                                           size_t client_index);
 static bool server_byte_is_allowed(unsigned char byte);
 static int server_handle_client_line(server_state_t *server,
@@ -108,13 +112,15 @@ static ssize_t server_find_client_index_by_player_id(const server_state_t *serve
 static const game_player_t *server_get_client_player(const server_state_t *server,
                                                      size_t client_index);
 static bool server_client_has_joined(const server_client_t *client);
-static int server_send_to_client(const server_client_t *client, const char *message);
+static int server_send_to_client(server_client_t *client, const char *message);
+static int server_try_flush_output(server_client_t *client);
+static int server_send_transient_message(int fd, const char *message);
 static int server_send_error_and_close(server_state_t *server,
                                        size_t client_index,
                                        const char *reason);
-static int server_broadcast_message(const server_state_t *server,
+static int server_broadcast_message(server_state_t *server,
                                     const char *message);
-static int server_broadcast_info(const server_state_t *server, const char *text);
+static int server_broadcast_info(server_state_t *server, const char *text);
 static void server_seed_rng_once(void);
 static void server_print_usage(const char *program_name);
 static void server_ignore_sigpipe(void);
@@ -232,13 +238,16 @@ static int server_create_listener(const char *port_text) {
 static int server_run_select_loop(server_state_t *server) {
     for (;;) {
         fd_set read_fds;
+        fd_set write_fds;
         struct timeval timeout;
         struct timeval *timeout_ptr;
         int max_fd;
-        int ready_count;
+        int select_result;
+        int any_ready;
         size_t i;
 
         FD_ZERO(&read_fds);
+        FD_ZERO(&write_fds);
         FD_SET(server->listen_fd, &read_fds);
         max_fd = server->listen_fd;
         timeout_ptr = NULL;
@@ -249,6 +258,9 @@ static int server_run_select_loop(server_state_t *server) {
             }
 
             FD_SET(server->clients[i].fd, &read_fds);
+            if (server->clients[i].output_len > 0) {
+                FD_SET(server->clients[i].fd, &write_fds);
+            }
             if (server->clients[i].fd > max_fd) {
                 max_fd = server->clients[i].fd;
             }
@@ -258,8 +270,8 @@ static int server_run_select_loop(server_state_t *server) {
             timeout_ptr = &timeout;
         }
 
-        ready_count = select(max_fd + 1, &read_fds, NULL, NULL, timeout_ptr);
-        if (ready_count < 0) {
+        select_result = select(max_fd + 1, &read_fds, &write_fds, NULL, timeout_ptr);
+        if (select_result < 0) {
             if (errno == EINTR) {
                 continue;
             }
@@ -268,7 +280,19 @@ static int server_run_select_loop(server_state_t *server) {
             return EXIT_FAILURE;
         }
 
-        if (ready_count == 0) {
+        any_ready = FD_ISSET(server->listen_fd, &read_fds);
+        for (i = 0; i < PROTOCOL_MAX_PLAYERS && !any_ready; i++) {
+            if (!server->clients[i].active) {
+                continue;
+            }
+
+            if (FD_ISSET(server->clients[i].fd, &read_fds) ||
+                FD_ISSET(server->clients[i].fd, &write_fds)) {
+                any_ready = 1;
+            }
+        }
+
+        if (!any_ready) {
             server_run_pending_action_if_due(server);
             server_enforce_phase_deadline(server);
             continue;
@@ -276,20 +300,24 @@ static int server_run_select_loop(server_state_t *server) {
 
         if (FD_ISSET(server->listen_fd, &read_fds)) {
             server_accept_client(server);
-            ready_count--;
         }
 
-        for (i = 0; i < PROTOCOL_MAX_PLAYERS && ready_count > 0; i++) {
+        for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
             if (!server->clients[i].active) {
                 continue;
             }
 
-            if (!FD_ISSET(server->clients[i].fd, &read_fds)) {
+            if (FD_ISSET(server->clients[i].fd, &read_fds)) {
+                server_handle_client_readable(server, i);
+            }
+
+            if (!server->clients[i].active) {
                 continue;
             }
 
-            server_handle_client_readable(server, i);
-            ready_count--;
+            if (FD_ISSET(server->clients[i].fd, &write_fds)) {
+                server_handle_client_writable(server, i);
+            }
         }
     }
 }
@@ -324,9 +352,15 @@ static void server_accept_client(server_state_t *server) {
         return;
     }
 
+    if (server_set_nonblocking(client_fd) != 0) {
+        perror("server: fcntl");
+        close(client_fd);
+        return;
+    }
+
     if (server->game.phase != GAME_PHASE_LOBBY) {
         if (protocol_format_error(message, sizeof(message), "game already started") >= 0) {
-            server_send_to_client(&(server_client_t){ .fd = client_fd }, message);
+            server_send_transient_message(client_fd, message);
         }
         close(client_fd);
         fprintf(stderr, "server: rejected connection because game already started\n");
@@ -336,7 +370,7 @@ static void server_accept_client(server_state_t *server) {
     free_slot = server_find_free_slot(server);
     if (free_slot < 0) {
         if (protocol_format_error(message, sizeof(message), "lobby is full") >= 0) {
-            server_send_to_client(&(server_client_t){ .fd = client_fd }, message);
+            server_send_transient_message(client_fd, message);
         }
         close(client_fd);
         fprintf(stderr, "server: rejecting connection because lobby is full\n");
@@ -361,6 +395,8 @@ static void server_reset_client_slot(server_client_t *client) {
     client->player_id = 0;
     client->input_buffer[0] = '\0';
     client->input_len = 0;
+    client->output_buffer[0] = '\0';
+    client->output_len = 0;
 }
 
 static ssize_t server_find_free_slot(const server_state_t *server) {
@@ -424,6 +460,21 @@ static void server_remove_client(server_state_t *server,
     }
 }
 
+static int server_set_nonblocking(int fd) {
+    int flags;
+
+    flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return -1;
+    }
+
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
 static void server_handle_client_readable(server_state_t *server,
                                           size_t client_index) {
     server_client_t *client;
@@ -434,6 +485,10 @@ static void server_handle_client_readable(server_state_t *server,
     client = &server->clients[client_index];
     bytes_read = recv(client->fd, read_buffer, sizeof(read_buffer), 0);
     if (bytes_read < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return;
+        }
+
         perror("server: recv");
         server_remove_client(server, client_index, "recv failure");
         return;
@@ -473,6 +528,13 @@ static void server_handle_client_readable(server_state_t *server,
         if (server_handle_client_line(server, client_index, line) != 0) {
             return;
         }
+    }
+}
+
+static void server_handle_client_writable(server_state_t *server,
+                                          size_t client_index) {
+    if (server_try_flush_output(&server->clients[client_index]) != 0) {
+        server_remove_client(server, client_index, "send failure");
     }
 }
 
@@ -532,8 +594,8 @@ static int server_handle_join_line(server_state_t *server,
     }
 
     if (!protocol_username_is_valid(username)) {
-        return server_send_error_and_close(server, client_index,
-                                           "invalid username");
+        server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid username\n");
+        return 0;
     }
 
     player_id = client->player_id;
@@ -553,8 +615,9 @@ static int server_handle_join_line(server_state_t *server,
                                                "game already started");
         }
 
-        return server_send_error_and_close(server, client_index,
-                                           game_action_result_message(result));
+        server_send_to_client(client,
+                              PROTOCOL_MSG_ERROR "|invalid username\n");
+        return 0;
     }
 
     if (client->player_id == 0) {
@@ -656,7 +719,7 @@ static int server_handle_submit_line(server_state_t *server,
         return 0;
     }
 
-    if (!protocol_submission_is_valid(submission)) {
+    if (!protocol_player_text_is_valid(submission, PROTOCOL_MAX_SUBMISSION_LEN)) {
         server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid submission\n");
         return 0;
     }
@@ -711,7 +774,7 @@ static int server_handle_title_line(server_state_t *server,
         return 0;
     }
 
-    if (!protocol_submission_is_valid(title_text)) {
+    if (!protocol_player_text_is_valid(title_text, PROTOCOL_MAX_SUBMISSION_LEN)) {
         server_send_to_client(client, PROTOCOL_MSG_ERROR "|invalid title\n");
         return 0;
     }
@@ -1072,7 +1135,11 @@ static void server_handle_phase_change(server_state_t *server) {
 }
 
 static void server_pause_text_group(void) {
-    usleep(SERVER_TEXT_GROUP_DELAY_USEC);
+    struct timespec delay;
+
+    delay.tv_sec = SERVER_TEXT_GROUP_DELAY_USEC / 1000000;
+    delay.tv_nsec = (long)(SERVER_TEXT_GROUP_DELAY_USEC % 1000000) * 1000L;
+    nanosleep(&delay, NULL);
 }
 
 static void server_view_send_to_player(void *context,
@@ -1161,8 +1228,7 @@ static bool server_client_has_joined(const server_client_t *client) {
     return client != NULL && client->player_id > 0;
 }
 
-static int server_send_to_client(const server_client_t *client, const char *message) {
-    size_t total_sent;
+static int server_send_to_client(server_client_t *client, const char *message) {
     size_t message_len;
 
     if (client == NULL || message == NULL || client->fd < 0) {
@@ -1170,16 +1236,78 @@ static int server_send_to_client(const server_client_t *client, const char *mess
     }
 
     message_len = strlen(message);
-    total_sent = 0;
-    while (total_sent < message_len) {
-        ssize_t sent = send(client->fd,
-                            message + total_sent,
-                            message_len - total_sent,
-                            0);
+    if (message_len > sizeof(client->output_buffer) - client->output_len) {
+        return -1;
+    }
+
+    memcpy(client->output_buffer + client->output_len, message, message_len);
+    client->output_len += message_len;
+    client->output_buffer[client->output_len] = '\0';
+
+    return server_try_flush_output(client);
+}
+
+static int server_try_flush_output(server_client_t *client) {
+    while (client != NULL && client->output_len > 0) {
+        ssize_t sent = send(client->fd, client->output_buffer, client->output_len, 0);
+
         if (sent < 0) {
             if (errno == EINTR) {
                 continue;
             }
+
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return 0;
+            }
+
+            return -1;
+        }
+
+        if (sent == 0) {
+            return -1;
+        }
+
+        if ((size_t)sent < client->output_len) {
+            memmove(client->output_buffer,
+                    client->output_buffer + sent,
+                    client->output_len - (size_t)sent);
+        }
+
+        client->output_len -= (size_t)sent;
+        client->output_buffer[client->output_len] = '\0';
+    }
+
+    return 0;
+}
+
+static int server_send_transient_message(int fd, const char *message) {
+    size_t total_sent = 0;
+    size_t message_len;
+
+    if (fd < 0 || message == NULL) {
+        return -1;
+    }
+
+    message_len = strlen(message);
+    while (total_sent < message_len) {
+        ssize_t sent = send(fd,
+                            message + total_sent,
+                            message_len - total_sent,
+                            0);
+
+        if (sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            }
+
+            return -1;
+        }
+
+        if (sent == 0) {
             return -1;
         }
 
@@ -1202,7 +1330,7 @@ static int server_send_error_and_close(server_state_t *server,
     return -1;
 }
 
-static int server_broadcast_message(const server_state_t *server,
+static int server_broadcast_message(server_state_t *server,
                                     const char *message) {
     size_t i;
 
@@ -1216,14 +1344,14 @@ static int server_broadcast_message(const server_state_t *server,
         }
 
         if (server_send_to_client(&server->clients[i], message) != 0) {
-            fprintf(stderr, "server: failed sending broadcast to slot %zu\n", i);
+            server_remove_client(server, i, "send failure");
         }
     }
 
     return 0;
 }
 
-static int server_broadcast_info(const server_state_t *server, const char *text) {
+static int server_broadcast_info(server_state_t *server, const char *text) {
     char message[PROTOCOL_LINE_BUFFER_SIZE];
 
     if (protocol_format_info(message, sizeof(message), text) < 0) {
