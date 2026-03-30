@@ -40,6 +40,8 @@ typedef struct {
     int player_id;
     char input_buffer[PROTOCOL_LINE_BUFFER_SIZE];
     size_t input_len;
+    char output_buffer[PROTOCOL_LINE_BUFFER_SIZE * 16 + 1];
+    size_t output_len;
 } server_client_t;
 
 typedef struct {
