@@ -177,7 +177,9 @@ game_action_result_t game_handle_submit(game_state_t *game,
                                         const char *submission) {
     int player_index;
 
-    if (game == NULL || submission == NULL || !protocol_submission_is_valid(submission)) {
+    if (game == NULL ||
+        submission == NULL ||
+        !protocol_player_text_is_valid(submission, PROTOCOL_MAX_SUBMISSION_LEN)) {
         return GAME_ACTION_INVALID_INPUT;
     }
 
@@ -216,7 +218,7 @@ game_action_result_t game_handle_rewrite(game_state_t *game,
 
     if (game == NULL ||
         rewrite_text == NULL ||
-        !protocol_submission_is_valid(rewrite_text)) {
+        !protocol_player_text_is_valid(rewrite_text, PROTOCOL_MAX_SUBMISSION_LEN)) {
         return GAME_ACTION_INVALID_INPUT;
     }
 
