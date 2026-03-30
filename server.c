@@ -1146,7 +1146,11 @@ static void server_handle_phase_change(server_state_t *server) {
 }
 
 static void server_pause_text_group(void) {
-    usleep(SERVER_TEXT_GROUP_DELAY_USEC);
+    struct timespec delay;
+
+    delay.tv_sec = SERVER_TEXT_GROUP_DELAY_USEC / 1000000;
+    delay.tv_nsec = (long)(SERVER_TEXT_GROUP_DELAY_USEC % 1000000) * 1000L;
+    nanosleep(&delay, NULL);
 }
 
 static void server_view_send_to_player(void *context,
