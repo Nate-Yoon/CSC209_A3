@@ -35,7 +35,9 @@ typedef struct {
     bool awaiting_submission;
     bool awaiting_title;
     bool awaiting_vote;
+    bool prompt_line_active;
     int vote_option_count;
+    char title_category[PROTOCOL_MAX_CATEGORY_NAME_LEN + 1];
 } client_state_t;
 
 static void client_print_usage(const char *program_name);
@@ -51,9 +53,11 @@ static void client_state_init(client_state_t *state);
 static void client_print_username_prompt(void);
 static void client_print_ready_prompt(void);
 static void client_print_answer_prompt(void);
-static void client_print_title_prompt(void);
+static void client_print_title_phase_intro(const client_state_t *state);
+static const char *client_title_input_prompt(const client_state_t *state);
+static void client_print_title_prompt(const client_state_t *state);
 static void client_print_vote_prompt(const client_state_t *state);
-static void client_break_prompt_line(const client_state_t *state);
+static void client_break_prompt_line(client_state_t *state);
 static int client_byte_is_allowed(unsigned char byte);
 static int client_handle_socket_data(const char *chunk,
                                      ssize_t chunk_len,
@@ -180,17 +184,15 @@ static int client_send_vote(int fd, int option_number) {
 }
 
 static void client_state_init(client_state_t *state) {
-    if (state == NULL) {
-        return;
-    }
-
     state->player_id = 0;
     state->joined = false;
     state->ready_sent = false;
     state->awaiting_submission = false;
     state->awaiting_title = false;
     state->awaiting_vote = false;
+    state->prompt_line_active = false;
     state->vote_option_count = 0;
+    strcpy(state->title_category, "generic");
 }
 
 static void client_print_username_prompt(void) {
@@ -208,13 +210,48 @@ static void client_print_answer_prompt(void) {
     fflush(stdout);
 }
 
-static void client_print_title_prompt(void) {
-    fputs("Would be a stupid answer to...: ", stdout);
+static void client_print_title_phase_intro(const client_state_t *state) {
+    const char *format;
+
+    if (strcmp(state->title_category, "headlines") == 0) {
+        format = "Write a funny news headline for the following comment in %d seconds:\n";
+    } else if (strcmp(state->title_category, "captions") == 0) {
+        format = "Write a caption / hashtag for the following post in %d seconds:\n";
+    } else if (strcmp(state->title_category, "reviews") == 0) {
+        format = "Write the product, service, or place being reviewed in %d seconds:\n";
+    } else if (strcmp(state->title_category, "forums") == 0) {
+        format = "Write a forum thread title / YouTube title for the following comment in %d seconds:\n";
+    } else {
+        format = "Give the following post a funny title in %d seconds:\n";
+    }
+
+    printf(format, PROTOCOL_TITLE_TIMEOUT_SECONDS);
+}
+
+static const char *client_title_input_prompt(const client_state_t *state) {
+    if (strcmp(state->title_category, "headlines") == 0) {
+        return "Headline: ";
+    }
+    if (strcmp(state->title_category, "captions") == 0) {
+        return "Caption / Hashtag: ";
+    }
+    if (strcmp(state->title_category, "reviews") == 0) {
+        return "Reviewed Item: ";
+    }
+    if (strcmp(state->title_category, "forums") == 0) {
+        return "Thread Title: ";
+    }
+
+    return "Title: ";
+}
+
+static void client_print_title_prompt(const client_state_t *state) {
+    fputs(client_title_input_prompt(state), stdout);
     fflush(stdout);
 }
 
 static void client_print_vote_prompt(const client_state_t *state) {
-    if (state == NULL || state->vote_option_count <= 0) {
+    if (state->vote_option_count <= 0) {
         return;
     }
 
@@ -223,13 +260,10 @@ static void client_print_vote_prompt(const client_state_t *state) {
     fflush(stdout);
 }
 
-static void client_break_prompt_line(const client_state_t *state) {
-    if (state == NULL) {
-        return;
-    }
-
-    if (state->awaiting_submission || state->awaiting_title || state->awaiting_vote) {
+static void client_break_prompt_line(client_state_t *state) {
+    if (state->prompt_line_active) {
         fputc('\n', stdout);
+        state->prompt_line_active = false;
     }
 }
 
@@ -288,8 +322,10 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
     if (protocol_parse_welcome_id(line, &player_id)) {
         state->joined = true;
         state->player_id = player_id;
+        state->prompt_line_active = false;
         puts("Joined the lobby.");
         client_print_ready_prompt();
+        state->prompt_line_active = true;
         return 0;
     }
 
@@ -297,12 +333,30 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         state->awaiting_submission = true;
         state->awaiting_title = false;
         state->awaiting_vote = false;
+        state->prompt_line_active = false;
         state->vote_option_count = 0;
-        puts("");
         printf("Give an answer to the following question in %d seconds:\n",
                PROTOCOL_SUBMISSION_TIMEOUT_SECONDS);
         puts(prompt);
         client_print_answer_prompt();
+        state->prompt_line_active = true;
+        return 0;
+    }
+
+    if (protocol_parse_title_prompt_fields(line,
+                                          state->title_category,
+                                          sizeof(state->title_category),
+                                          prompt,
+                                          sizeof(prompt))) {
+        state->awaiting_submission = false;
+        state->awaiting_title = true;
+        state->awaiting_vote = false;
+        state->prompt_line_active = false;
+        state->vote_option_count = 0;
+        client_print_title_phase_intro(state);
+        puts(prompt);
+        client_print_title_prompt(state);
+        state->prompt_line_active = true;
         return 0;
     }
 
@@ -310,12 +364,13 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         state->awaiting_submission = false;
         state->awaiting_title = true;
         state->awaiting_vote = false;
+        state->prompt_line_active = false;
         state->vote_option_count = 0;
-        puts("");
-        printf("Give the following post a funny title in %d seconds:\n",
-               PROTOCOL_TITLE_TIMEOUT_SECONDS);
+        strcpy(state->title_category, "generic");
+        client_print_title_phase_intro(state);
         puts(prompt);
-        client_print_title_prompt();
+        client_print_title_prompt(state);
+        state->prompt_line_active = true;
         return 0;
     }
 
@@ -323,15 +378,17 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         state->awaiting_submission = false;
         state->awaiting_title = false;
         state->awaiting_vote = true;
+        state->prompt_line_active = false;
         state->vote_option_count = player_id;
-        puts("");
         printf("Voting is open for %d seconds.\n", PROTOCOL_VOTE_TIMEOUT_SECONDS);
         client_print_vote_prompt(state);
+        state->prompt_line_active = true;
         return 0;
     }
 
     if (protocol_parse_info_text(line, text, sizeof(text))) {
         client_break_prompt_line(state);
+        state->prompt_line_active = false;
         if (state->awaiting_vote) {
             state->awaiting_vote = false;
             state->vote_option_count = 0;
@@ -342,17 +399,23 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
 
     if (protocol_parse_error_text(line, text, sizeof(text))) {
         client_break_prompt_line(state);
+        state->prompt_line_active = false;
         printf("Error: %s\n", text);
         if (!state->joined) {
             client_print_username_prompt();
+            state->prompt_line_active = true;
         } else if (state->awaiting_submission) {
             client_print_answer_prompt();
+            state->prompt_line_active = true;
         } else if (state->awaiting_title) {
-            client_print_title_prompt();
+            client_print_title_prompt(state);
+            state->prompt_line_active = true;
         } else if (state->awaiting_vote) {
             client_print_vote_prompt(state);
+            state->prompt_line_active = true;
         } else if (!state->ready_sent) {
             client_print_ready_prompt();
+            state->prompt_line_active = true;
         }
         return 0;
     }
@@ -366,6 +429,7 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         state->awaiting_submission = false;
         state->awaiting_title = false;
         state->awaiting_vote = false;
+        state->prompt_line_active = false;
         state->vote_option_count = 0;
         printf("%s posted: %s\n", username, submission);
         return 0;
@@ -376,12 +440,14 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         state->awaiting_submission = false;
         state->awaiting_title = false;
         state->awaiting_vote = false;
+        state->prompt_line_active = false;
         state->vote_option_count = 0;
         printf("Round winner: %s\n", username);
         return 0;
     }
 
     client_break_prompt_line(state);
+    state->prompt_line_active = false;
     fputs(line, stdout);
     fflush(stdout);
     return 0;
@@ -393,14 +459,19 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
     if (line[0] == '\0') {
         if (!state->joined) {
             client_print_username_prompt();
+            state->prompt_line_active = true;
         } else if (state->awaiting_submission) {
             client_print_answer_prompt();
+            state->prompt_line_active = true;
         } else if (state->awaiting_title) {
-            client_print_title_prompt();
+            client_print_title_prompt(state);
+            state->prompt_line_active = true;
         } else if (state->awaiting_vote) {
             client_print_vote_prompt(state);
+            state->prompt_line_active = true;
         } else if (!state->ready_sent) {
             client_print_ready_prompt();
+            state->prompt_line_active = true;
         }
         return 0;
     }
@@ -410,6 +481,7 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
             printf("Username must be 1-%d alphanumeric characters.\n",
                    PROTOCOL_MAX_USERNAME_LEN);
             client_print_username_prompt();
+            state->prompt_line_active = true;
             return 0;
         }
 
@@ -419,6 +491,7 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
         }
 
         puts("Joining lobby...");
+        state->prompt_line_active = false;
         return 0;
     }
 
@@ -427,6 +500,7 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
             printf("Answers must be 1-%d printable characters and cannot include '|'.\n",
                    PROTOCOL_MAX_SUBMISSION_LEN);
             client_print_answer_prompt();
+            state->prompt_line_active = true;
             return 0;
         }
 
@@ -437,6 +511,7 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
 
         state->awaiting_submission = false;
         puts("Answer sent. Waiting for the rest of the players...");
+        state->prompt_line_active = false;
         return 0;
     }
 
@@ -444,7 +519,8 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
         if (!protocol_submission_is_valid(line)) {
             printf("Titles must be 1-%d printable characters and cannot include '|'.\n",
                    PROTOCOL_MAX_SUBMISSION_LEN);
-            client_print_title_prompt();
+            client_print_title_prompt(state);
+            state->prompt_line_active = true;
             return 0;
         }
 
@@ -455,6 +531,7 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
 
         state->awaiting_title = false;
         puts("Title sent. Waiting for the rest of the players...");
+        state->prompt_line_active = false;
         return 0;
     }
 
@@ -468,6 +545,7 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
             printf("Votes must be a number from 1 to %d.\n",
                    state->vote_option_count);
             client_print_vote_prompt(state);
+            state->prompt_line_active = true;
             return 0;
         }
 
@@ -478,6 +556,7 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
 
         state->awaiting_vote = false;
         puts("Vote sent. Waiting for the rest of the players...");
+        state->prompt_line_active = false;
         return 0;
     }
 
@@ -485,6 +564,7 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
         if (strcmp(line, "ready") != 0) {
             puts("Type ready when you want to mark yourself ready.");
             client_print_ready_prompt();
+            state->prompt_line_active = true;
             return 0;
         }
 
@@ -495,10 +575,12 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
 
         state->ready_sent = true;
         puts("Marked ready. Waiting for the game to start...");
+        state->prompt_line_active = false;
         return 0;
     }
 
     puts("Waiting for the current phase to finish...");
+    state->prompt_line_active = false;
     return 0;
 }
 

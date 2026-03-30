@@ -19,13 +19,11 @@ enum {
 };
 
 typedef enum {
-    ROUND_READ_OK = 0,
-    ROUND_READ_EOF,
-    ROUND_READ_IO_ERROR,
-    ROUND_READ_LINE_TOO_LONG,
-    ROUND_READ_BLANK_LINE,
-    ROUND_READ_TEXT_TOO_LONG
-} round_read_result_t;
+    ROUND_CONTENT_OK = 0,
+    ROUND_CONTENT_EOF,
+    ROUND_CONTENT_IO_ERROR,
+    ROUND_CONTENT_LINE_TOO_LONG
+} round_content_result_t;
 
 typedef struct {
     char prompt[PROTOCOL_MAX_PROMPT_LEN + 1];
@@ -33,13 +31,16 @@ typedef struct {
 } round_prompt_pair_t;
 
 static void round_reset_player_state(round_player_state_t *player_state);
+static round_category_t round_category_from_header(const char *line);
 static bool round_load_prompt_pairs(const char *file_path,
+                                    round_category_t category,
                                     round_prompt_pair_t **pairs_out,
                                     size_t *pair_count_out);
-static round_read_result_t round_read_prompt_line(FILE *file,
-                                                  char *buffer,
-                                                  size_t buffer_size,
-                                                  size_t max_len);
+static bool round_prompt_text_is_valid(const char *text);
+static round_content_result_t round_read_next_content_line(FILE *file,
+                                                           char *buffer,
+                                                           size_t buffer_size,
+                                                           size_t *line_number);
 static bool round_report_load_error(const char *file_path,
                                     size_t line_number,
                                     const char *reason);
@@ -62,6 +63,7 @@ void round_state_reset(round_state_t *round) {
 
     round->active = false;
     round->round_number = 0;
+    round->category = ROUND_CATEGORY_NONE;
     round->participant_count = 0;
     round->submission_count = 0;
     round->rewrite_count = 0;
@@ -73,6 +75,9 @@ void round_state_reset(round_state_t *round) {
     round->winning_entry_index = ROUND_NO_ENTRY;
     round->winning_title_writer_index = ROUND_NO_TARGET;
     round->winning_vote_total = 0;
+    round->runner_up_entry_index = ROUND_NO_ENTRY;
+    round->runner_up_title_writer_index = ROUND_NO_TARGET;
+    round->runner_up_vote_total = 0;
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         round->reveal_order[i] = ROUND_NO_ENTRY;
@@ -81,14 +86,17 @@ void round_state_reset(round_state_t *round) {
     }
 }
 
-bool round_begin(round_state_t *round, int round_number) {
-    if (round == NULL || round_number <= 0) {
+bool round_begin(round_state_t *round,
+                 int round_number,
+                 round_category_t category) {
+    if (round == NULL || round_number <= 0 || category == ROUND_CATEGORY_NONE) {
         return false;
     }
 
     round_state_reset(round);
     round->active = true;
     round->round_number = round_number;
+    round->category = category;
     return true;
 }
 
@@ -131,7 +139,7 @@ bool round_assign_prompts_from_file(round_state_t *round, const char *file_path)
 
     pairs = NULL;
     pair_count = 0;
-    if (!round_load_prompt_pairs(file_path, &pairs, &pair_count)) {
+    if (!round_load_prompt_pairs(file_path, round->category, &pairs, &pair_count)) {
         return false;
     }
 
@@ -401,6 +409,9 @@ bool round_prepare_voting(round_state_t *round) {
     round->winning_entry_index = ROUND_NO_ENTRY;
     round->winning_title_writer_index = ROUND_NO_TARGET;
     round->winning_vote_total = 0;
+    round->runner_up_entry_index = ROUND_NO_ENTRY;
+    round->runner_up_title_writer_index = ROUND_NO_TARGET;
+    round->runner_up_vote_total = 0;
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         round->reveal_order[i] = ROUND_NO_ENTRY;
@@ -601,8 +612,11 @@ const char *round_get_title_for_submission_owner(const round_state_t *round,
 
 bool round_finalize_winner(round_state_t *round) {
     int best_targets[PROTOCOL_MAX_PLAYERS];
+    int runner_up_targets[PROTOCOL_MAX_PLAYERS];
     int best_count;
     int best_vote_total;
+    int runner_up_count;
+    int runner_up_vote_total;
     int i;
 
     if (round == NULL || !round->active || round->reveal_count <= 0) {
@@ -611,6 +625,8 @@ bool round_finalize_winner(round_state_t *round) {
 
     best_count = 0;
     best_vote_total = -1;
+    runner_up_count = 0;
+    runner_up_vote_total = -1;
     for (i = 0; i < round->reveal_count; i++) {
         int owner_index = round->reveal_order[i];
         int owner_votes;
@@ -639,6 +655,34 @@ bool round_finalize_winner(round_state_t *round) {
         round_get_title_writer_for_submission_owner(round,
                                                     (size_t)round->winning_entry_index);
     round->winning_vote_total = best_vote_total;
+
+    for (i = 0; i < round->reveal_count; i++) {
+        int owner_index = round->reveal_order[i];
+        int owner_votes;
+
+        if (owner_index < 0 || owner_index == round->winning_entry_index) {
+            continue;
+        }
+
+        owner_votes = round->vote_totals[owner_index];
+        if (owner_votes > runner_up_vote_total) {
+            runner_up_vote_total = owner_votes;
+            runner_up_targets[0] = owner_index;
+            runner_up_count = 1;
+        } else if (owner_votes == runner_up_vote_total) {
+            runner_up_targets[runner_up_count] = owner_index;
+            runner_up_count++;
+        }
+    }
+
+    if (runner_up_count > 0) {
+        round->runner_up_entry_index = runner_up_targets[rand() % runner_up_count];
+        round->runner_up_title_writer_index =
+            round_get_title_writer_for_submission_owner(round,
+                                                        (size_t)round->runner_up_entry_index);
+        round->runner_up_vote_total = runner_up_vote_total;
+    }
+
     return round->winning_title_writer_index >= 0;
 }
 
@@ -664,6 +708,30 @@ int round_get_winning_vote_total(const round_state_t *round) {
     }
 
     return round->winning_vote_total;
+}
+
+int round_get_runner_up_entry_index(const round_state_t *round) {
+    if (round == NULL) {
+        return ROUND_NO_ENTRY;
+    }
+
+    return round->runner_up_entry_index;
+}
+
+int round_get_runner_up_title_writer_index(const round_state_t *round) {
+    if (round == NULL) {
+        return ROUND_NO_TARGET;
+    }
+
+    return round->runner_up_title_writer_index;
+}
+
+int round_get_runner_up_vote_total(const round_state_t *round) {
+    if (round == NULL) {
+        return 0;
+    }
+
+    return round->runner_up_vote_total;
 }
 
 bool round_all_submitted(const round_state_t *round) {
@@ -753,10 +821,6 @@ int round_pick_random_submitted_index(const round_state_t *round) {
 }
 
 static void round_reset_player_state(round_player_state_t *player_state) {
-    if (player_state == NULL) {
-        return;
-    }
-
     player_state->active = false;
     player_state->has_submitted = false;
     player_state->submitted_manually = false;
@@ -771,7 +835,29 @@ static void round_reset_player_state(round_player_state_t *player_state) {
     player_state->voted_for_index = ROUND_NO_VOTE;
 }
 
+static round_category_t round_category_from_header(const char *line) {
+    if (line[0] != '#') {
+        return ROUND_CATEGORY_NONE;
+    }
+
+    if (strcmp(line, "#headlines") == 0) {
+        return ROUND_CATEGORY_HEADLINES;
+    }
+    if (strcmp(line, "#captions") == 0) {
+        return ROUND_CATEGORY_CAPTIONS;
+    }
+    if (strcmp(line, "#reviews") == 0) {
+        return ROUND_CATEGORY_REVIEWS;
+    }
+    if (strcmp(line, "#forums") == 0) {
+        return ROUND_CATEGORY_FORUMS;
+    }
+
+    return ROUND_CATEGORY_NONE;
+}
+
 static bool round_load_prompt_pairs(const char *file_path,
+                                    round_category_t category,
                                     round_prompt_pair_t **pairs_out,
                                     size_t *pair_count_out) {
     FILE *file;
@@ -779,10 +865,14 @@ static bool round_load_prompt_pairs(const char *file_path,
     size_t pair_count;
     size_t capacity;
     size_t line_number;
+    round_category_t current_category;
     char prompt_buffer[ROUND_FILE_BUFFER_SIZE];
     char fallback_buffer[ROUND_FILE_BUFFER_SIZE];
 
-    if (file_path == NULL || pairs_out == NULL || pair_count_out == NULL) {
+    if (file_path == NULL ||
+        pairs_out == NULL ||
+        pair_count_out == NULL ||
+        category == ROUND_CATEGORY_NONE) {
         return false;
     }
 
@@ -797,84 +887,110 @@ static bool round_load_prompt_pairs(const char *file_path,
     pair_count = 0;
     capacity = 0;
     line_number = 0;
+    current_category = ROUND_CATEGORY_NONE;
 
     for (;;) {
-        round_read_result_t prompt_result;
+        round_content_result_t prompt_result;
+        round_content_result_t fallback_result;
         round_prompt_pair_t *resized_pairs;
-        round_read_result_t fallback_result;
+        round_category_t header_category;
 
-        prompt_result = round_read_prompt_line(file,
-                                               prompt_buffer,
-                                               sizeof(prompt_buffer),
-                                               PROTOCOL_MAX_PROMPT_LEN);
-        if (prompt_result == ROUND_READ_EOF) {
+        prompt_result = round_read_next_content_line(file,
+                                                     prompt_buffer,
+                                                     sizeof(prompt_buffer),
+                                                     &line_number);
+        if (prompt_result == ROUND_CONTENT_EOF) {
             break;
         }
-
-        line_number++;
-        if (prompt_result == ROUND_READ_IO_ERROR) {
+        if (prompt_result == ROUND_CONTENT_IO_ERROR) {
             free(pairs);
             fclose(file);
             return round_report_load_error(file_path,
                                            line_number,
-                                           "failed while reading prompt line");
+                                           "failed while reading prompt bank");
         }
-        if (prompt_result == ROUND_READ_LINE_TOO_LONG) {
+        if (prompt_result == ROUND_CONTENT_LINE_TOO_LONG) {
             free(pairs);
             fclose(file);
             return round_report_load_error(file_path,
                                            line_number,
-                                           "prompt line is too long or missing a newline before the line limit");
-        }
-        if (prompt_result == ROUND_READ_BLANK_LINE) {
-            free(pairs);
-            fclose(file);
-            return round_report_load_error(file_path,
-                                           line_number,
-                                           "blank line encountered where a prompt was expected");
-        }
-        if (prompt_result == ROUND_READ_TEXT_TOO_LONG) {
-            free(pairs);
-            fclose(file);
-            return round_report_load_error(file_path,
-                                           line_number,
-                                           "prompt exceeds the maximum allowed prompt length");
+                                           "line is too long or missing a newline before the line limit");
         }
 
-        fallback_result = round_read_prompt_line(file,
-                                                 fallback_buffer,
-                                                 sizeof(fallback_buffer),
-                                                 PROTOCOL_MAX_SUBMISSION_LEN);
-        line_number++;
-        if (fallback_result == ROUND_READ_EOF) {
+        header_category = round_category_from_header(prompt_buffer);
+        if (header_category != ROUND_CATEGORY_NONE) {
+            current_category = header_category;
+            continue;
+        }
+
+        if (prompt_buffer[0] == '#') {
+            free(pairs);
+            fclose(file);
+            return round_report_load_error(file_path,
+                                           line_number,
+                                           "unknown category header");
+        }
+
+        if (current_category == ROUND_CATEGORY_NONE) {
+            free(pairs);
+            fclose(file);
+            return round_report_load_error(file_path,
+                                           line_number,
+                                           "found prompt text before any category header");
+        }
+
+        fallback_result = round_read_next_content_line(file,
+                                                       fallback_buffer,
+                                                       sizeof(fallback_buffer),
+                                                       &line_number);
+        if (fallback_result == ROUND_CONTENT_EOF) {
             free(pairs);
             fclose(file);
             return round_report_load_error(file_path,
                                            line_number,
                                            "odd number of lines: prompt is missing its fallback answer");
         }
-        if (fallback_result == ROUND_READ_IO_ERROR) {
+        if (fallback_result == ROUND_CONTENT_IO_ERROR) {
             free(pairs);
             fclose(file);
             return round_report_load_error(file_path,
                                            line_number,
                                            "failed while reading fallback answer line");
         }
-        if (fallback_result == ROUND_READ_LINE_TOO_LONG) {
+        if (fallback_result == ROUND_CONTENT_LINE_TOO_LONG) {
             free(pairs);
             fclose(file);
             return round_report_load_error(file_path,
                                            line_number,
                                            "fallback answer line is too long or missing a newline before the line limit");
         }
-        if (fallback_result == ROUND_READ_BLANK_LINE) {
+
+        if (round_category_from_header(fallback_buffer) != ROUND_CATEGORY_NONE ||
+            fallback_buffer[0] == '#') {
             free(pairs);
             fclose(file);
             return round_report_load_error(file_path,
                                            line_number,
-                                           "blank line encountered where a fallback answer was expected");
+                                           "prompt is missing its fallback answer before the next category header");
         }
-        if (fallback_result == ROUND_READ_TEXT_TOO_LONG) {
+
+        if (strlen(prompt_buffer) > PROTOCOL_MAX_PROMPT_LEN) {
+            free(pairs);
+            fclose(file);
+            return round_report_load_error(file_path,
+                                           line_number - 1,
+                                           "prompt exceeds the maximum allowed prompt length");
+        }
+
+        if (!round_prompt_text_is_valid(prompt_buffer)) {
+            free(pairs);
+            fclose(file);
+            return round_report_load_error(file_path,
+                                           line_number - 1,
+                                           "prompt contains invalid non-ASCII or protocol characters");
+        }
+
+        if (strlen(fallback_buffer) > PROTOCOL_MAX_SUBMISSION_LEN) {
             free(pairs);
             fclose(file);
             return round_report_load_error(file_path,
@@ -888,6 +1004,10 @@ static bool round_load_prompt_pairs(const char *file_path,
             return round_report_load_error(file_path,
                                            line_number,
                                            "fallback answer contains invalid submission characters");
+        }
+
+        if (current_category != category) {
+            continue;
         }
 
         if (pair_count == capacity) {
@@ -925,7 +1045,8 @@ static bool round_load_prompt_pairs(const char *file_path,
     if (pair_count == 0) {
         free(pairs);
         fclose(file);
-        return round_report_load_error(file_path, 0, "no usable prompt/default pairs found");
+        return round_report_load_error(file_path, 0,
+                                       "no usable prompt/default pairs found for the requested category");
     }
 
     fclose(file);
@@ -934,45 +1055,61 @@ static bool round_load_prompt_pairs(const char *file_path,
     return true;
 }
 
-static round_read_result_t round_read_prompt_line(FILE *file,
-                                                  char *buffer,
-                                                  size_t buffer_size,
-                                                  size_t max_len) {
-    if (file == NULL || buffer == NULL || buffer_size == 0) {
-        return ROUND_READ_IO_ERROR;
+static bool round_prompt_text_is_valid(const char *text) {
+    size_t i;
+
+    if (text == NULL || text[0] == '\0') {
+        return false;
     }
 
-    if (fgets(buffer, (int)buffer_size, file) == NULL) {
-        if (feof(file)) {
-            return ROUND_READ_EOF;
+    for (i = 0; text[i] != '\0'; i++) {
+        unsigned char byte = (unsigned char)text[i];
+
+        if (byte < 32 || byte > 126 || byte == '|') {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static round_content_result_t round_read_next_content_line(FILE *file,
+                                                           char *buffer,
+                                                           size_t buffer_size,
+                                                           size_t *line_number) {
+    if (file == NULL || buffer == NULL || buffer_size == 0) {
+        return ROUND_CONTENT_IO_ERROR;
+    }
+
+    for (;;) {
+        if (fgets(buffer, (int)buffer_size, file) == NULL) {
+            if (feof(file)) {
+                return ROUND_CONTENT_EOF;
+            }
+
+            return ROUND_CONTENT_IO_ERROR;
         }
 
-        return ROUND_READ_IO_ERROR;
-    }
+        if (line_number != NULL) {
+            (*line_number)++;
+        }
 
-    if (strchr(buffer, '\n') == NULL && !feof(file)) {
-        return ROUND_READ_LINE_TOO_LONG;
-    }
+        if (strchr(buffer, '\n') == NULL && !feof(file)) {
+            return ROUND_CONTENT_LINE_TOO_LONG;
+        }
 
-    round_strip_newline(buffer);
-    if (buffer[0] == '\0') {
-        return ROUND_READ_BLANK_LINE;
-    }
+        round_strip_newline(buffer);
+        if (buffer[0] == '\0') {
+            continue;
+        }
 
-    if (strlen(buffer) > max_len) {
-        return ROUND_READ_TEXT_TOO_LONG;
+        return ROUND_CONTENT_OK;
     }
-
-    return ROUND_READ_OK;
 }
 
 static bool round_report_load_error(const char *file_path,
                                     size_t line_number,
                                     const char *reason) {
-    if (file_path == NULL || reason == NULL) {
-        return false;
-    }
-
     if (line_number == 0) {
         fprintf(stderr, "round: prompt bank %s is invalid: %s\n",
                 file_path, reason);
@@ -986,10 +1123,6 @@ static bool round_report_load_error(const char *file_path,
 
 static void round_strip_newline(char *text) {
     size_t len;
-
-    if (text == NULL) {
-        return;
-    }
 
     len = strlen(text);
     while (len > 0 && (text[len - 1] == '\n' || text[len - 1] == '\r')) {

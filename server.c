@@ -34,7 +34,7 @@
 enum {
     SERVER_LISTEN_BACKLOG = PROTOCOL_MAX_PLAYERS,
     SERVER_READ_CHUNK_SIZE = 256,
-    SERVER_STAGE_HOLD_SECONDS = 3,
+    SERVER_STAGE_HOLD_SECONDS = 4,
     SERVER_TEXT_GROUP_DELAY_USEC = 1000000
 };
 
@@ -641,9 +641,7 @@ static int server_handle_submit_line(server_state_t *server,
                                      const char *line) {
     server_client_t *client;
     const game_player_t *player;
-    const round_state_t *round;
     char submission[PROTOCOL_MAX_SUBMISSION_LEN + 1];
-    char message[PROTOCOL_LINE_BUFFER_SIZE];
     game_action_result_t result;
 
     client = &server->clients[client_index];
@@ -678,18 +676,6 @@ static int server_handle_submit_line(server_state_t *server,
 
         server_send_to_client(client, PROTOCOL_MSG_ERROR "|join first\n");
         return 0;
-    }
-
-    if (server_send_to_client(client, PROTOCOL_MSG_INFO "|submission received\n") != 0) {
-        server_remove_client(server, client_index, "send failure");
-        return -1;
-    }
-
-    round = game_get_current_round(&server->game);
-    if (round != NULL) {
-        snprintf(message, sizeof(message), "submission received (%d/%d)",
-                 round->submission_count, round->participant_count);
-        server_broadcast_info(server, message);
     }
 
     player = server_get_client_player(server, client_index);
@@ -982,10 +968,14 @@ static void server_run_title_prompt_action(server_state_t *server,
 static void server_run_voting_prompt_action(server_state_t *server,
                                             game_view_sink_t *view,
                                             time_t now) {
+    time_t start_time;
+
+    (void)now;
     server->pending_action = SERVER_PENDING_NONE;
     server->pending_action_at = 0;
-    game_start_vote_window(&server->game, now);
     game_view_announce_voting_phase(&server->game, view);
+    start_time = time(NULL);
+    game_start_vote_window(&server->game, start_time);
 }
 
 static void server_run_round_results_action(server_state_t *server,
@@ -1075,7 +1065,6 @@ static void server_handle_phase_change(server_state_t *server) {
     }
 
     if (server->game.phase == GAME_PHASE_RESULTS) {
-        game_view_broadcast_stage_banner(&view, "The Big Reveal");
         server_schedule_pending_action(server,
                                       SERVER_PENDING_ROUND_RESULTS,
                                       now + SERVER_STAGE_HOLD_SECONDS);
