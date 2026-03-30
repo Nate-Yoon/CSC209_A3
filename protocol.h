@@ -17,11 +17,12 @@ enum {
     PROTOCOL_MIN_PLAYERS = 3,
     PROTOCOL_MAX_PLAYERS = 5,
     PROTOCOL_MAX_USERNAME_LEN = 16,
-    PROTOCOL_MAX_SUBMISSION_LEN = 64,
+    PROTOCOL_MAX_CATEGORY_NAME_LEN = 16,
+    PROTOCOL_MAX_SUBMISSION_LEN = 96,
     PROTOCOL_MAX_LINE_LEN = 128,
     PROTOCOL_MAX_PROMPT_LEN = PROTOCOL_MAX_LINE_LEN - 8,
     PROTOCOL_LINE_BUFFER_SIZE = PROTOCOL_MAX_LINE_LEN + 1,
-    PROTOCOL_SUBMISSION_TIMEOUT_SECONDS = 20,
+    PROTOCOL_SUBMISSION_TIMEOUT_SECONDS = 45,
     PROTOCOL_TITLE_TIMEOUT_SECONDS = 60,
     PROTOCOL_VOTE_TIMEOUT_SECONDS = 30
 };
@@ -60,6 +61,11 @@ bool protocol_parse_submit_text(const char *line,
 bool protocol_parse_title_text(const char *line,
                                char *title_out,
                                size_t title_out_size);
+bool protocol_parse_title_prompt_fields(const char *line,
+                                        char *category_out,
+                                        size_t category_out_size,
+                                        char *text_out,
+                                        size_t text_out_size);
 bool protocol_parse_rewrite_text(const char *line,
                                  char *rewrite_out,
                                  size_t rewrite_out_size);
@@ -89,6 +95,10 @@ int protocol_format_error(char *buffer, size_t buffer_size, const char *reason);
 int protocol_format_info(char *buffer, size_t buffer_size, const char *text);
 int protocol_format_prompt(char *buffer, size_t buffer_size, const char *prompt_text);
 int protocol_format_title(char *buffer, size_t buffer_size, const char *title_text);
+int protocol_format_title_prompt(char *buffer,
+                                 size_t buffer_size,
+                                 const char *category,
+                                 const char *text);
 int protocol_format_result(char *buffer,
                            size_t buffer_size,
                            const char *username,

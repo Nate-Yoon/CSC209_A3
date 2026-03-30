@@ -22,6 +22,7 @@ static int game_find_player_index(const game_state_t *game, int player_id);
 static int game_find_open_player_slot(const game_state_t *game);
 static bool game_username_is_unique(const game_state_t *game, const char *username);
 static void game_reset_player(game_player_t *player);
+static round_category_t game_category_for_round_number(int round_number);
 static int game_get_rewrite_target_index_for_player(const game_state_t *game, int player_id);
 static int game_get_reveal_owner_index_at(const game_state_t *game, size_t reveal_index);
 static bool game_apply_round_scores(game_state_t *game);
@@ -311,7 +312,9 @@ bool game_begin_round(game_state_t *game) {
     }
 
     next_round_number = game->round_number + 1;
-    if (!round_begin(&game->current_round, next_round_number)) {
+    if (!round_begin(&game->current_round,
+                     next_round_number,
+                     game_category_for_round_number(next_round_number))) {
         return false;
     }
 
@@ -689,6 +692,17 @@ int game_get_player_forbidden_vote_option(const game_state_t *game, int player_i
     return 0;
 }
 
+round_category_t game_get_round_category(const game_state_t *game) {
+    const round_state_t *round;
+
+    round = game_get_current_round(game);
+    if (round == NULL) {
+        return ROUND_CATEGORY_NONE;
+    }
+
+    return round->category;
+}
+
 const char *game_action_result_message(game_action_result_t result) {
     switch (result) {
         case GAME_ACTION_OK:
@@ -770,10 +784,6 @@ static int game_find_player_index(const game_state_t *game, int player_id) {
 static int game_find_open_player_slot(const game_state_t *game) {
     int i;
 
-    if (game == NULL) {
-        return -1;
-    }
-
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         if (!game->players[i].joined) {
             return i;
@@ -785,10 +795,6 @@ static int game_find_open_player_slot(const game_state_t *game) {
 
 static bool game_username_is_unique(const game_state_t *game, const char *username) {
     size_t i;
-
-    if (game == NULL || username == NULL) {
-        return false;
-    }
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         if (!game->players[i].joined) {
@@ -804,16 +810,27 @@ static bool game_username_is_unique(const game_state_t *game, const char *userna
 }
 
 static void game_reset_player(game_player_t *player) {
-    if (player == NULL) {
-        return;
-    }
-
     player->player_id = 0;
     player->username[0] = '\0';
     player->score = 0;
     player->connected = false;
     player->joined = false;
     player->ready = false;
+}
+
+static round_category_t game_category_for_round_number(int round_number) {
+    switch (round_number) {
+        case 1:
+            return ROUND_CATEGORY_HEADLINES;
+        case 2:
+            return ROUND_CATEGORY_CAPTIONS;
+        case 3:
+            return ROUND_CATEGORY_REVIEWS;
+        case 4:
+            return ROUND_CATEGORY_FORUMS;
+        default:
+            return ROUND_CATEGORY_NONE;
+    }
 }
 
 static int game_get_rewrite_target_index_for_player(const game_state_t *game, int player_id) {
@@ -842,6 +859,8 @@ static int game_get_reveal_owner_index_at(const game_state_t *game, size_t revea
 static bool game_apply_round_scores(game_state_t *game) {
     int winning_owner_index;
     int winning_title_writer_index;
+    int runner_up_owner_index;
+    int runner_up_title_writer_index;
 
     if (game == NULL) {
         return false;
@@ -858,7 +877,16 @@ static bool game_apply_round_scores(game_state_t *game) {
         return false;
     }
 
-    game->players[winning_title_writer_index].score += 100;
-    game->players[winning_owner_index].score += 25;
+    game->players[winning_title_writer_index].score += GAME_FIRST_TITLE_POINTS;
+    game->players[winning_owner_index].score += GAME_FIRST_ANSWER_POINTS;
+
+    runner_up_owner_index = round_get_runner_up_entry_index(&game->current_round);
+    runner_up_title_writer_index =
+        round_get_runner_up_title_writer_index(&game->current_round);
+    if (runner_up_owner_index >= 0 && runner_up_title_writer_index >= 0) {
+        game->players[runner_up_title_writer_index].score += GAME_FIRST_TITLE_POINTS / 2;
+        game->players[runner_up_owner_index].score += GAME_FIRST_ANSWER_POINTS / 2;
+    }
+
     return true;
 }

@@ -18,7 +18,9 @@
 #include "round.h"
 
 enum {
-    GAME_TOTAL_ROUNDS = 4
+    GAME_TOTAL_ROUNDS = 4,
+    GAME_FIRST_TITLE_POINTS = 100,
+    GAME_FIRST_ANSWER_POINTS = 20
 };
 
 typedef enum {
@@ -102,6 +104,7 @@ const char *game_get_reveal_submission_at(const game_state_t *game, size_t revea
 const char *game_get_reveal_title_at(const game_state_t *game, size_t reveal_index);
 int game_get_vote_target_player_id_at(const game_state_t *game, int option_number);
 int game_get_player_forbidden_vote_option(const game_state_t *game, int player_id);
+round_category_t game_get_round_category(const game_state_t *game);
 const char *game_action_result_message(game_action_result_t result);
 
 #endif
