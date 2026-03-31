@@ -205,8 +205,14 @@ void game_view_broadcast_round_results(const game_state_t *game,
                                        const game_view_sink_t *sink) {
     const round_state_t *round;
     char line[PROTOCOL_LINE_BUFFER_SIZE];
-    int reveal_index;
-    bool any_votes_awarded;
+    int winning_entry_index;
+    int winning_title_writer_index;
+    int runner_up_entry_index;
+    int runner_up_title_writer_index;
+    const game_player_t *winning_owner;
+    const game_player_t *winning_title_writer;
+    const game_player_t *runner_up_owner;
+    const game_player_t *runner_up_title_writer;
 
     if (game == NULL) {
         return;
@@ -217,53 +223,45 @@ void game_view_broadcast_round_results(const game_state_t *game,
         return;
     }
 
-    any_votes_awarded = false;
-    game_view_broadcast(sink, "Votes counted.");
-    game_view_pause(sink);
-    for (reveal_index = 0; reveal_index < round->reveal_count; reveal_index++) {
-        int owner_index = round->reveal_order[reveal_index];
-        int title_writer_index;
-        int vote_total;
-        const game_player_t *owner;
-        const game_player_t *title_writer;
-
-        if (owner_index < 0) {
-            continue;
-        }
-
-        vote_total = round->vote_totals[owner_index];
-        if (vote_total <= 0) {
-            continue;
-        }
-
-        title_writer_index =
-            round_get_title_writer_for_submission_owner(round, (size_t)owner_index);
-        if (title_writer_index < 0) {
-            continue;
-        }
-
-        owner = game_get_player_at(game, (size_t)owner_index);
-        title_writer = game_get_player_at(game, (size_t)title_writer_index);
-        if (owner == NULL || title_writer == NULL) {
-            continue;
-        }
-
-        any_votes_awarded = true;
-        snprintf(line, sizeof(line),
-                 "Option %d received %d vote(s): %s +%d, %s +%d",
-                 reveal_index + 1,
-                 vote_total,
-                 title_writer->username,
-                 vote_total * GAME_VOTE_TITLE_POINTS,
-                 owner->username,
-                 vote_total * GAME_VOTE_ANSWER_POINTS);
+    winning_entry_index = round_get_winning_entry_index(round);
+    winning_title_writer_index = round_get_winning_title_writer_index(round);
+    runner_up_entry_index = round_get_runner_up_entry_index(round);
+    runner_up_title_writer_index = round_get_runner_up_title_writer_index(round);
+    winning_owner = game_get_player_at(game, (size_t)winning_entry_index);
+    winning_title_writer = game_get_player_at(game, (size_t)winning_title_writer_index);
+    runner_up_owner = game_get_player_at(game, (size_t)runner_up_entry_index);
+    runner_up_title_writer = game_get_player_at(game, (size_t)runner_up_title_writer_index);
+    if (winning_owner != NULL && winning_title_writer != NULL) {
+        snprintf(line, sizeof(line), "Winning entry received %d vote(s).",
+                 round_get_winning_vote_total(round));
+        game_view_broadcast(sink, line);
+        game_view_pause(sink);
+        snprintf(line, sizeof(line), "First place title by %s (+%d)",
+                 winning_title_writer->username,
+                 GAME_FIRST_TITLE_POINTS);
+        game_view_broadcast(sink, line);
+        game_view_pause(sink);
+        snprintf(line, sizeof(line), "First place answer by %s (+%d)",
+                 winning_owner->username,
+                 GAME_FIRST_ANSWER_POINTS);
         game_view_broadcast(sink, line);
         game_view_pause(sink);
     }
 
-    if (!any_votes_awarded) {
-        game_view_broadcast(sink, "No votes were cast this round.");
+    if (runner_up_owner != NULL && runner_up_title_writer != NULL) {
+        snprintf(line, sizeof(line), "Second place received %d vote(s).",
+                 round_get_runner_up_vote_total(round));
+        game_view_broadcast(sink, line);
         game_view_pause(sink);
+        snprintf(line, sizeof(line), "Second place title by %s (+%d)",
+                 runner_up_title_writer->username,
+                 GAME_FIRST_TITLE_POINTS / 2);
+        game_view_broadcast(sink, line);
+        game_view_pause(sink);
+        snprintf(line, sizeof(line), "Second place answer by %s (+%d)",
+                 runner_up_owner->username,
+                 GAME_FIRST_ANSWER_POINTS / 2);
+        game_view_broadcast(sink, line);
     }
 
     game_view_broadcast(sink, "End of round.");
