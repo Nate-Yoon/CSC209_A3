@@ -117,6 +117,7 @@ static int server_send_to_client_slot(server_state_t *server,
                                       size_t client_index,
                                       const char *message);
 static int server_try_flush_output(server_client_t *client);
+static void server_log_outgoing_message(int fd, const char *message);
 static int server_send_transient_message(int fd, const char *message);
 static int server_send_error_and_close(server_state_t *server,
                                        size_t client_index,
@@ -1258,6 +1259,8 @@ static int server_send_to_client(server_client_t *client, const char *message) {
         return -1;
     }
 
+    server_log_outgoing_message(client->fd, message);
+
     message_len = strlen(message);
     if (message_len > sizeof(client->output_buffer) - client->output_len) {
         return -1;
@@ -1303,6 +1306,25 @@ static int server_try_flush_output(server_client_t *client) {
     return 0;
 }
 
+static void server_log_outgoing_message(int fd, const char *message) {
+    const char *newline;
+
+    if (fd < 0 || message == NULL) {
+        return;
+    }
+
+    newline = strchr(message, '\n');
+    if (newline == NULL) {
+        fprintf(stderr, "server -> fd %d: %s\n", fd, message);
+        return;
+    }
+
+    fprintf(stderr, "server -> fd %d: %.*s\n",
+            fd,
+            (int)(newline - message),
+            message);
+}
+
 static int server_send_transient_message(int fd, const char *message) {
     size_t total_sent = 0;
     size_t message_len;
@@ -1310,6 +1332,8 @@ static int server_send_transient_message(int fd, const char *message) {
     if (fd < 0 || message == NULL) {
         return -1;
     }
+
+    server_log_outgoing_message(fd, message);
 
     message_len = strlen(message);
     while (total_sent < message_len) {
