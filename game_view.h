@@ -16,13 +16,13 @@
 typedef void (*game_view_send_to_player_fn)(void *context,
                                             int player_id,
                                             const char *message);
-typedef void (*game_view_broadcast_info_fn)(void *context, const char *text);
+typedef void (*game_view_broadcast_text_fn)(void *context, const char *text);
 typedef void (*game_view_pause_fn)(void *context);
 
 typedef struct {
     void *context;
     game_view_send_to_player_fn send_to_player;
-    game_view_broadcast_info_fn broadcast_info;
+    game_view_broadcast_text_fn broadcast_text;
     game_view_pause_fn pause_text_group;
 } game_view_sink_t;
 
@@ -30,8 +30,6 @@ void game_view_broadcast_stage_banner(const game_view_sink_t *sink,
                                       const char *label);
 void game_view_broadcast_round_intro(const game_state_t *game,
                                      const game_view_sink_t *sink);
-void game_view_broadcast_lobby_status(const game_state_t *game,
-                                      const game_view_sink_t *sink);
 void game_view_announce_round_start(const game_state_t *game,
                                     const game_view_sink_t *sink);
 void game_view_send_title_prompts(const game_state_t *game,

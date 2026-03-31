@@ -27,6 +27,9 @@ static bool protocol_parse_two_fields(const char *line,
                                       size_t first_out_size,
                                       char *second_out,
                                       size_t second_out_size);
+static bool protocol_parse_int_field(const char *line,
+                                     const char *prefix,
+                                     int *value_out);
 static int protocol_checked_snprintf(char *buffer,
                                      size_t buffer_size,
                                      const char *format,
@@ -76,32 +79,25 @@ bool protocol_parse_join_username(const char *line,
 }
 
 bool protocol_parse_welcome_id(const char *line, int *player_id_out) {
-    const char *prefix = PROTOCOL_MSG_WELCOME "|";
-    const char *number_start;
-    char *endptr;
-    long value;
+    return protocol_parse_int_field(line, PROTOCOL_MSG_WELCOME "|", player_id_out);
+}
 
-    if (line == NULL || player_id_out == NULL) {
-        return false;
-    }
+bool protocol_parse_lobby_event_text(const char *line,
+                                     char *text_out,
+                                     size_t text_out_size) {
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_LOBBY_EVENT "|",
+                                           text_out,
+                                           text_out_size);
+}
 
-    if (strncmp(line, prefix, strlen(prefix)) != 0) {
-        return false;
-    }
-
-    number_start = line + strlen(prefix);
-    errno = 0;
-    value = strtol(number_start, &endptr, 10);
-    if (endptr == number_start || strcmp(endptr, "\n") != 0) {
-        return false;
-    }
-
-    if (errno == ERANGE || value <= 0 || value > INT_MAX) {
-        return false;
-    }
-
-    *player_id_out = (int)value;
-    return true;
+bool protocol_parse_lobby_roster(const char *line,
+                                 char *roster_out,
+                                 size_t roster_out_size) {
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_LOBBY_ROSTER "|",
+                                           roster_out,
+                                           roster_out_size);
 }
 
 bool protocol_parse_submit_text(const char *line,
@@ -128,7 +124,7 @@ bool protocol_parse_title_prompt_fields(const char *line,
                                         char *text_out,
                                         size_t text_out_size) {
     return protocol_parse_two_fields(line,
-                                     PROTOCOL_MSG_TITLE "|",
+                                     PROTOCOL_MSG_TITLE_PROMPT "|",
                                      category_out,
                                      category_out_size,
                                      text_out,
@@ -145,39 +141,31 @@ bool protocol_parse_rewrite_text(const char *line,
 }
 
 bool protocol_parse_vote_target(const char *line, int *target_id_out) {
-    const char *prefix = PROTOCOL_MSG_VOTE "|";
-    const char *number_start;
-    char *endptr;
-    long value;
-
-    if (line == NULL || target_id_out == NULL) {
-        return false;
-    }
-
-    if (strncmp(line, prefix, strlen(prefix)) != 0) {
-        return false;
-    }
-
-    number_start = line + strlen(prefix);
-    errno = 0;
-    value = strtol(number_start, &endptr, 10);
-    if (endptr == number_start || strcmp(endptr, "\n") != 0) {
-        return false;
-    }
-
-    if (errno == ERANGE || value <= 0 || value > INT_MAX) {
-        return false;
-    }
-
-    *target_id_out = (int)value;
-    return true;
+    return protocol_parse_int_field(line, PROTOCOL_MSG_VOTE "|", target_id_out);
 }
 
-bool protocol_parse_info_text(const char *line,
-                              char *text_out,
-                              size_t text_out_size) {
+bool protocol_parse_vote_open_count(const char *line, int *option_count_out) {
+    return protocol_parse_int_field(line, PROTOCOL_MSG_VOTE_OPEN "|", option_count_out);
+}
+
+bool protocol_parse_vote_rule_option(const char *line, int *option_number_out) {
+    return protocol_parse_int_field(line, PROTOCOL_MSG_VOTE_RULE "|", option_number_out);
+}
+
+bool protocol_parse_round_text(const char *line,
+                               char *text_out,
+                               size_t text_out_size) {
     return protocol_parse_text_with_prefix(line,
-                                           PROTOCOL_MSG_INFO "|",
+                                           PROTOCOL_MSG_ROUND_TEXT "|",
+                                           text_out,
+                                           text_out_size);
+}
+
+bool protocol_parse_game_event_text(const char *line,
+                                    char *text_out,
+                                    size_t text_out_size) {
+    return protocol_parse_text_with_prefix(line,
+                                           PROTOCOL_MSG_GAME_EVENT "|",
                                            text_out,
                                            text_out_size);
 }
@@ -198,28 +186,6 @@ bool protocol_parse_prompt_text(const char *line,
                                            PROTOCOL_MSG_PROMPT "|",
                                            prompt_out,
                                            prompt_out_size);
-}
-
-bool protocol_parse_result_fields(const char *line,
-                                  char *username_out,
-                                  size_t username_out_size,
-                                  char *submission_out,
-                                  size_t submission_out_size) {
-    return protocol_parse_two_fields(line,
-                                     PROTOCOL_MSG_RESULT "|",
-                                     username_out,
-                                     username_out_size,
-                                     submission_out,
-                                     submission_out_size);
-}
-
-bool protocol_parse_winner_username(const char *line,
-                                    char *username_out,
-                                    size_t username_out_size) {
-    return protocol_parse_text_with_prefix(line,
-                                           PROTOCOL_MSG_WINNER "|",
-                                           username_out,
-                                           username_out_size);
 }
 
 bool protocol_username_is_valid(const char *username) {
@@ -311,6 +277,54 @@ int protocol_format_welcome(char *buffer, size_t buffer_size, int player_id) {
                                      PROTOCOL_MSG_WELCOME "|%d\n", player_id);
 }
 
+int protocol_format_lobby_event(char *buffer, size_t buffer_size, const char *text) {
+    if (buffer == NULL || buffer_size == 0 || text == NULL) {
+        return -1;
+    }
+
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_LOBBY_EVENT "|%s\n", text);
+}
+
+int protocol_format_lobby_roster(char *buffer,
+                                 size_t buffer_size,
+                                 const char *const *usernames,
+                                 size_t username_count) {
+    size_t used;
+    size_t i;
+
+    if (buffer == NULL || buffer_size == 0 || usernames == NULL || username_count == 0) {
+        return -1;
+    }
+
+    used = (size_t)snprintf(buffer, buffer_size, "%s", PROTOCOL_MSG_LOBBY_ROSTER);
+    if (used >= buffer_size) {
+        return -1;
+    }
+
+    for (i = 0; i < username_count; i++) {
+        int written;
+
+        if (usernames[i] == NULL) {
+            return -1;
+        }
+
+        written = snprintf(buffer + used, buffer_size - used, "|%s", usernames[i]);
+        if (written < 0 || (size_t)written >= buffer_size - used) {
+            return -1;
+        }
+        used += (size_t)written;
+    }
+
+    if (used + 2 > buffer_size) {
+        return -1;
+    }
+
+    buffer[used++] = '\n';
+    buffer[used] = '\0';
+    return (int)used;
+}
+
 int protocol_format_error(char *buffer, size_t buffer_size, const char *reason) {
     if (buffer == NULL || buffer_size == 0 || reason == NULL) {
         return -1;
@@ -318,15 +332,6 @@ int protocol_format_error(char *buffer, size_t buffer_size, const char *reason) 
 
     return protocol_checked_snprintf(buffer, buffer_size,
                                      PROTOCOL_MSG_ERROR "|%s\n", reason);
-}
-
-int protocol_format_info(char *buffer, size_t buffer_size, const char *text) {
-    if (buffer == NULL || buffer_size == 0 || text == NULL) {
-        return -1;
-    }
-
-    return protocol_checked_snprintf(buffer, buffer_size,
-                                     PROTOCOL_MSG_INFO "|%s\n", text);
 }
 
 int protocol_format_prompt(char *buffer, size_t buffer_size, const char *prompt_text) {
@@ -338,15 +343,6 @@ int protocol_format_prompt(char *buffer, size_t buffer_size, const char *prompt_
                                      PROTOCOL_MSG_PROMPT "|%s\n", prompt_text);
 }
 
-int protocol_format_title(char *buffer, size_t buffer_size, const char *title_text) {
-    if (buffer == NULL || buffer_size == 0 || title_text == NULL) {
-        return -1;
-    }
-
-    return protocol_checked_snprintf(buffer, buffer_size,
-                                     PROTOCOL_MSG_TITLE "|%s\n", title_text);
-}
-
 int protocol_format_title_prompt(char *buffer,
                                  size_t buffer_size,
                                  const char *category,
@@ -356,31 +352,44 @@ int protocol_format_title_prompt(char *buffer,
     }
 
     return protocol_checked_snprintf(buffer, buffer_size,
-                                     PROTOCOL_MSG_TITLE "|%s|%s\n",
+                                     PROTOCOL_MSG_TITLE_PROMPT "|%s|%s\n",
                                      category, text);
 }
 
-int protocol_format_result(char *buffer,
-                           size_t buffer_size,
-                           const char *username,
-                           const char *submission) {
-    if (buffer == NULL || buffer_size == 0 ||
-        username == NULL || submission == NULL) {
+int protocol_format_vote_open(char *buffer, size_t buffer_size, int option_count) {
+    if (buffer == NULL || buffer_size == 0 || option_count <= 0) {
         return -1;
     }
 
     return protocol_checked_snprintf(buffer, buffer_size,
-                                     PROTOCOL_MSG_RESULT "|%s|%s\n",
-                                     username, submission);
+                                     PROTOCOL_MSG_VOTE_OPEN "|%d\n", option_count);
 }
 
-int protocol_format_winner(char *buffer, size_t buffer_size, const char *username) {
-    if (buffer == NULL || buffer_size == 0 || username == NULL) {
+int protocol_format_vote_rule(char *buffer, size_t buffer_size, int option_number) {
+    if (buffer == NULL || buffer_size == 0 || option_number <= 0) {
         return -1;
     }
 
     return protocol_checked_snprintf(buffer, buffer_size,
-                                     PROTOCOL_MSG_WINNER "|%s\n", username);
+                                     PROTOCOL_MSG_VOTE_RULE "|%d\n", option_number);
+}
+
+int protocol_format_round_text(char *buffer, size_t buffer_size, const char *text) {
+    if (buffer == NULL || buffer_size == 0 || text == NULL) {
+        return -1;
+    }
+
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_ROUND_TEXT "|%s\n", text);
+}
+
+int protocol_format_game_event(char *buffer, size_t buffer_size, const char *text) {
+    if (buffer == NULL || buffer_size == 0 || text == NULL) {
+        return -1;
+    }
+
+    return protocol_checked_snprintf(buffer, buffer_size,
+                                     PROTOCOL_MSG_GAME_EVENT "|%s\n", text);
 }
 
 static bool protocol_parse_text_with_prefix(const char *line,
@@ -460,6 +469,37 @@ static bool protocol_parse_two_fields(const char *line,
     second_out[second_len] = '\0';
     return true;
 }
+
+static bool protocol_parse_int_field(const char *line,
+                                     const char *prefix,
+                                     int *value_out) {
+    const char *number_start;
+    char *endptr;
+    long value;
+
+    if (line == NULL || prefix == NULL || value_out == NULL) {
+        return false;
+    }
+
+    if (strncmp(line, prefix, strlen(prefix)) != 0) {
+        return false;
+    }
+
+    number_start = line + strlen(prefix);
+    errno = 0;
+    value = strtol(number_start, &endptr, 10);
+    if (endptr == number_start || strcmp(endptr, "\n") != 0) {
+        return false;
+    }
+
+    if (errno == ERANGE || value <= 0 || value > INT_MAX) {
+        return false;
+    }
+
+    *value_out = (int)value;
+    return true;
+}
+
 
 static int protocol_checked_snprintf(char *buffer,
                                      size_t buffer_size,
