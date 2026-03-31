@@ -113,6 +113,9 @@ static const game_player_t *server_get_client_player(const server_state_t *serve
                                                      size_t client_index);
 static bool server_client_has_joined(const server_client_t *client);
 static int server_send_to_client(server_client_t *client, const char *message);
+static int server_send_to_client_slot(server_state_t *server,
+                                      size_t client_index,
+                                      const char *message);
 static int server_try_flush_output(server_client_t *client);
 static int server_send_transient_message(int fd, const char *message);
 static int server_send_error_and_close(server_state_t *server,
@@ -1360,15 +1363,12 @@ static int server_send_error_and_close(server_state_t *server,
 
 static int server_broadcast_message(server_state_t *server,
                                     const char *message) {
-    size_t failed_indices[PROTOCOL_MAX_PLAYERS];
-    size_t failed_count;
     size_t i;
 
     if (server == NULL || message == NULL) {
         return -1;
     }
 
-    failed_count = 0;
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         if (!server->clients[i].active || !server_client_has_joined(&server->clients[i])) {
             continue;
