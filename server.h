@@ -31,7 +31,8 @@ typedef enum {
     SERVER_PENDING_ROUND_RESULTS,
     SERVER_PENDING_SCOREBOARD,
     SERVER_PENDING_FINAL_SCOREBOARD,
-    SERVER_PENDING_GAME_OVER
+    SERVER_PENDING_GAME_OVER,
+    SERVER_PENDING_REPLAY_START
 } server_pending_action_t;
 
 typedef struct {
@@ -48,6 +49,7 @@ typedef struct {
     int listen_fd;
     int next_player_id;
     int active_clients;
+    bool shutdown_requested;
     time_t pending_action_at;
     server_pending_action_t pending_action;
     game_state_t game;

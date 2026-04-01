@@ -50,6 +50,10 @@ protocol_message_type_t protocol_identify_message(const char *line) {
         return PROTOCOL_TYPE_READY;
     }
 
+    if (strncmp(line, PROTOCOL_MSG_REPLAY "|", strlen(PROTOCOL_MSG_REPLAY) + 1) == 0) {
+        return PROTOCOL_TYPE_REPLAY;
+    }
+
     if (strncmp(line, PROTOCOL_MSG_SUBMIT "|", strlen(PROTOCOL_MSG_SUBMIT) + 1) == 0) {
         return PROTOCOL_TYPE_SUBMIT;
     }
@@ -98,6 +102,33 @@ bool protocol_parse_lobby_roster(const char *line,
                                            PROTOCOL_MSG_LOBBY_ROSTER "|",
                                            roster_out,
                                            roster_out_size);
+}
+
+bool protocol_parse_replay_choice(const char *line, bool *wants_replay_out) {
+    char choice[2];
+
+    if (wants_replay_out == NULL) {
+        return false;
+    }
+
+    if (!protocol_parse_text_with_prefix(line,
+                                         PROTOCOL_MSG_REPLAY "|",
+                                         choice,
+                                         sizeof(choice))) {
+        return false;
+    }
+
+    if (choice[0] == 'y' && choice[1] == '\0') {
+        *wants_replay_out = true;
+        return true;
+    }
+
+    if (choice[0] == 'n' && choice[1] == '\0') {
+        *wants_replay_out = false;
+        return true;
+    }
+
+    return false;
 }
 
 bool protocol_parse_submit_text(const char *line,
