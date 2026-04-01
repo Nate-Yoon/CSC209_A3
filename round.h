@@ -58,12 +58,6 @@ typedef struct {
     time_t rewrite_deadline;
     time_t voting_deadline;
     int reveal_order[PROTOCOL_MAX_PLAYERS];
-    int winning_entry_index;
-    int winning_title_writer_index;
-    int winning_vote_total;
-    int runner_up_entry_index;
-    int runner_up_title_writer_index;
-    int runner_up_vote_total;
     int vote_totals[PROTOCOL_MAX_PLAYERS];
     round_player_state_t players[PROTOCOL_MAX_PLAYERS];
 } round_state_t;
@@ -101,19 +95,14 @@ time_t round_get_voting_deadline(const round_state_t *round);
 int round_get_rewrite_target_index(const round_state_t *round, size_t player_index);
 int round_get_reveal_count(const round_state_t *round);
 int round_get_reveal_owner_at(const round_state_t *round, size_t reveal_index);
+int round_get_vote_total_for_submission_owner(const round_state_t *round,
+                                              size_t player_index);
 const char *round_get_player_prompt(const round_state_t *round, size_t player_index);
 const char *round_get_player_submission(const round_state_t *round, size_t player_index);
 int round_get_title_writer_for_submission_owner(const round_state_t *round,
                                                 size_t player_index);
 const char *round_get_title_for_submission_owner(const round_state_t *round,
                                                  size_t player_index);
-bool round_finalize_winner(round_state_t *round);
-int round_get_winning_entry_index(const round_state_t *round);
-int round_get_winning_title_writer_index(const round_state_t *round);
-int round_get_winning_vote_total(const round_state_t *round);
-int round_get_runner_up_entry_index(const round_state_t *round);
-int round_get_runner_up_title_writer_index(const round_state_t *round);
-int round_get_runner_up_vote_total(const round_state_t *round);
 bool round_all_submitted(const round_state_t *round);
 bool round_all_rewritten(const round_state_t *round);
 bool round_all_voted(const round_state_t *round);
