@@ -618,6 +618,12 @@ static int server_handle_join_line(server_state_t *server,
                                                "game already started");
         }
 
+        if (result == GAME_ACTION_USERNAME_IN_USE) {
+            server_send_to_client(client,
+                                  PROTOCOL_MSG_ERROR "|username already in use\n");
+            return 0;
+        }
+
         server_send_to_client(client,
                               PROTOCOL_MSG_ERROR "|invalid username\n");
         return 0;
@@ -1242,7 +1248,7 @@ static int server_send_to_client(server_client_t *client, const char *message) {
     server_log_outgoing_message(client->fd, message);
 
     message_len = strlen(message);
-    if (message_len > sizeof(client->output_buffer) - client->output_len) {
+    if (message_len + client->output_len >= sizeof(client->output_buffer)) {
         return -1;
     }
 
@@ -1306,15 +1312,14 @@ static void server_log_outgoing_message(int fd, const char *message) {
 }
 
 static int server_send_transient_message(int fd, const char *message) {
-    size_t total_sent = 0;
+    size_t total_sent;
     size_t message_len;
 
     if (fd < 0 || message == NULL) {
         return -1;
     }
 
-    server_log_outgoing_message(fd, message);
-
+    total_sent = 0;
     message_len = strlen(message);
     while (total_sent < message_len) {
         ssize_t sent = send(fd,
@@ -1348,9 +1353,11 @@ static int server_send_error_and_close(server_state_t *server,
                                        size_t client_index,
                                        const char *reason) {
     char message[PROTOCOL_LINE_BUFFER_SIZE];
+    int fd;
 
-    if (protocol_format_error(message, sizeof(message), reason) >= 0) {
-        server_send_to_client(&server->clients[client_index], message);
+    fd = server->clients[client_index].fd;
+    if (protocol_format_error(message, sizeof(message), reason) >= 0 && fd >= 0) {
+        server_send_transient_message(fd, message);
     }
 
     server_remove_client(server, client_index, reason);
