@@ -44,17 +44,58 @@ typedef enum {
 #define PROTOCOL_MSG_REWRITE "REWRITE"
 #define PROTOCOL_MSG_VOTE "VOTE"
 #define PROTOCOL_MSG_WELCOME "WELCOME"
+#define PROTOCOL_MSG_LOBBY_EVENT "LOBBY_EVENT"
+#define PROTOCOL_MSG_LOBBY_ROSTER "LOBBY_ROSTER"
 #define PROTOCOL_MSG_ERROR "ERROR"
-#define PROTOCOL_MSG_INFO "INFO"
 #define PROTOCOL_MSG_PROMPT "PROMPT"
-#define PROTOCOL_MSG_RESULT "RESULT"
-#define PROTOCOL_MSG_WINNER "WINNER"
+#define PROTOCOL_MSG_TITLE_PROMPT "TITLE_PROMPT"
+#define PROTOCOL_MSG_VOTE_OPEN "VOTE_OPEN"
+#define PROTOCOL_MSG_VOTE_RULE "VOTE_RULE"
+#define PROTOCOL_MSG_ROUND_TEXT "ROUND_TEXT"
+#define PROTOCOL_MSG_GAME_EVENT "GAME_EVENT"
+
+/*
+ * Wire-level message contract
+ *
+ * Client -> server
+ * JOIN|<username>\n
+ * READY\n
+ * SUBMIT|<answer text>\n
+ * TITLE|<title text>\n
+ * REWRITE|<rewrite text>\n
+ * VOTE|<option number>\n
+ *
+ * Server -> client
+ * WELCOME|<player id>\n
+ * LOBBY_EVENT|<text>\n
+ * LOBBY_ROSTER|<username>|<username>|...\n
+ * PROMPT|<prompt text>\n
+ * TITLE_PROMPT|<category>|<submission text>\n
+ * VOTE_RULE|<forbidden option>\n
+ * VOTE_OPEN|<option count>\n
+ * ROUND_TEXT|<text>\n
+ * GAME_EVENT|<text>\n
+ * ERROR|<reason>\n
+ *
+ * Invalid-message behavior
+ * - Unknown headers are rejected by the server with ERROR|unsupported message.
+ * - Known headers with malformed payloads are rejected with a message-specific
+ *   ERROR response such as invalid JOIN format or invalid vote format.
+ * - Client-side parse helpers return false on malformed server messages; the
+ *   client falls back to printing the raw line instead of guessing.
+ */
 
 protocol_message_type_t protocol_identify_message(const char *line);
 bool protocol_parse_join_username(const char *line,
                                   char *username_out,
                                   size_t username_out_size);
 bool protocol_parse_welcome_id(const char *line, int *player_id_out);
+bool protocol_parse_lobby_event_text(const char *line,
+                                     char *text_out,
+                                     size_t text_out_size);
+bool protocol_parse_lobby_roster(const char *line,
+                                 char *roster_out,
+                                 size_t roster_out_size);
 bool protocol_parse_submit_text(const char *line,
                                 char *submission_out,
                                 size_t submission_out_size);
@@ -70,39 +111,38 @@ bool protocol_parse_rewrite_text(const char *line,
                                  char *rewrite_out,
                                  size_t rewrite_out_size);
 bool protocol_parse_vote_target(const char *line, int *target_id_out);
-bool protocol_parse_info_text(const char *line,
-                              char *text_out,
-                              size_t text_out_size);
+bool protocol_parse_vote_open_count(const char *line, int *option_count_out);
+bool protocol_parse_vote_rule_option(const char *line, int *option_number_out);
+bool protocol_parse_round_text(const char *line,
+                               char *text_out,
+                               size_t text_out_size);
+bool protocol_parse_game_event_text(const char *line,
+                                    char *text_out,
+                                    size_t text_out_size);
 bool protocol_parse_error_text(const char *line,
                                char *text_out,
                                size_t text_out_size);
 bool protocol_parse_prompt_text(const char *line,
                                 char *prompt_out,
                                 size_t prompt_out_size);
-bool protocol_parse_result_fields(const char *line,
-                                  char *username_out,
-                                  size_t username_out_size,
-                                  char *submission_out,
-                                  size_t submission_out_size);
-bool protocol_parse_winner_username(const char *line,
-                                    char *username_out,
-                                    size_t username_out_size);
 bool protocol_username_is_valid(const char *username);
 bool protocol_player_text_is_valid(const char *text, size_t max_len);
 bool protocol_submission_is_valid(const char *submission);
 int protocol_format_welcome(char *buffer, size_t buffer_size, int player_id);
+int protocol_format_lobby_event(char *buffer, size_t buffer_size, const char *text);
+int protocol_format_lobby_roster(char *buffer,
+                                 size_t buffer_size,
+                                 const char *const *usernames,
+                                 size_t username_count);
 int protocol_format_error(char *buffer, size_t buffer_size, const char *reason);
-int protocol_format_info(char *buffer, size_t buffer_size, const char *text);
 int protocol_format_prompt(char *buffer, size_t buffer_size, const char *prompt_text);
-int protocol_format_title(char *buffer, size_t buffer_size, const char *title_text);
 int protocol_format_title_prompt(char *buffer,
                                  size_t buffer_size,
                                  const char *category,
                                  const char *text);
-int protocol_format_result(char *buffer,
-                           size_t buffer_size,
-                           const char *username,
-                           const char *submission);
-int protocol_format_winner(char *buffer, size_t buffer_size, const char *username);
+int protocol_format_vote_open(char *buffer, size_t buffer_size, int option_count);
+int protocol_format_vote_rule(char *buffer, size_t buffer_size, int option_number);
+int protocol_format_round_text(char *buffer, size_t buffer_size, const char *text);
+int protocol_format_game_event(char *buffer, size_t buffer_size, const char *text);
 
 #endif

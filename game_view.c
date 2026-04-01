@@ -59,22 +59,6 @@ void game_view_broadcast_round_intro(const game_state_t *game,
     game_view_broadcast_stage_banner(sink, label);
 }
 
-void game_view_broadcast_lobby_status(const game_state_t *game,
-                                      const game_view_sink_t *sink) {
-    char message[PROTOCOL_LINE_BUFFER_SIZE];
-
-    if (game == NULL) {
-        return;
-    }
-
-    snprintf(message, sizeof(message),
-             "lobby status: %d joined, %d ready, need at least %d ready to start",
-             game_count_joined_players(game),
-             game_count_ready_players(game),
-             PROTOCOL_MIN_PLAYERS);
-    game_view_broadcast(sink, message);
-}
-
 void game_view_announce_round_start(const game_state_t *game,
                                     const game_view_sink_t *sink) {
     char message[PROTOCOL_LINE_BUFFER_SIZE];
@@ -191,13 +175,14 @@ void game_view_announce_voting_phase(const game_state_t *game,
             snprintf(line, sizeof(line),
                      "You cannot vote for option %d because that is the title you wrote.",
                      forbidden_option);
-            if (protocol_format_info(message, sizeof(message), line) >= 0) {
+            if (protocol_format_vote_rule(message, sizeof(message), forbidden_option) >= 0) {
                 game_view_send_player(sink, player->player_id, message);
             }
         }
 
-        snprintf(message, sizeof(message), "%s|%d\n", PROTOCOL_MSG_VOTE, reveal_count);
-        game_view_send_player(sink, player->player_id, message);
+        if (protocol_format_vote_open(message, sizeof(message), reveal_count) >= 0) {
+            game_view_send_player(sink, player->player_id, message);
+        }
     }
 }
 
@@ -381,11 +366,11 @@ void game_view_broadcast_final_winners(const game_state_t *game,
 }
 
 static void game_view_broadcast(const game_view_sink_t *sink, const char *text) {
-    if (sink == NULL || sink->broadcast_info == NULL || text == NULL) {
+    if (sink == NULL || sink->broadcast_text == NULL || text == NULL) {
         return;
     }
 
-    sink->broadcast_info(sink->context, text);
+    sink->broadcast_text(sink->context, text);
 }
 
 static void game_view_send_player(const game_view_sink_t *sink,
