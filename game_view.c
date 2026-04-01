@@ -223,21 +223,31 @@ void game_view_broadcast_round_results(const game_state_t *game,
             continue;
         }
 
+        any_points_awarded = true;
+
         title_writer_index =
             round_get_title_writer_for_submission_owner(round, (size_t)owner_index);
         owner = game_get_player_at(game, (size_t)owner_index);
         title_writer = game_get_player_at(game, (size_t)title_writer_index);
-        if (owner == NULL || title_writer == NULL) {
+        if (owner == NULL) {
             continue;
         }
 
-        any_points_awarded = true;
-        snprintf(line, sizeof(line), "%s's title received %d vote(s) (+%d)",
-                 title_writer->username,
-                 vote_total,
-                 vote_total * GAME_FIRST_TITLE_POINTS);
-        game_view_broadcast(sink, line);
-        game_view_pause(sink);
+        if (title_writer != NULL) {
+            snprintf(line, sizeof(line), "%s's title received %d vote(s) (+%d)",
+                     title_writer->username,
+                     vote_total,
+                     vote_total * GAME_FIRST_TITLE_POINTS);
+            game_view_broadcast(sink, line);
+            game_view_pause(sink);
+        } else {
+            snprintf(line, sizeof(line),
+                     "A disconnected player's title received %d vote(s).",
+                     vote_total);
+            game_view_broadcast(sink, line);
+            game_view_pause(sink);
+        }
+
         snprintf(line, sizeof(line), "%s's original answer earned pity points (+%d)",
                  owner->username,
                  vote_total * GAME_FIRST_ANSWER_POINTS);
