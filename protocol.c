@@ -62,10 +62,6 @@ protocol_message_type_t protocol_identify_message(const char *line) {
         return PROTOCOL_TYPE_TITLE;
     }
 
-    if (strncmp(line, PROTOCOL_MSG_REWRITE "|", strlen(PROTOCOL_MSG_REWRITE) + 1) == 0) {
-        return PROTOCOL_TYPE_REWRITE;
-    }
-
     if (strncmp(line, PROTOCOL_MSG_VOTE "|", strlen(PROTOCOL_MSG_VOTE) + 1) == 0) {
         return PROTOCOL_TYPE_VOTE;
     }
@@ -160,15 +156,6 @@ bool protocol_parse_title_prompt_fields(const char *line,
                                      category_out_size,
                                      text_out,
                                      text_out_size);
-}
-
-bool protocol_parse_rewrite_text(const char *line,
-                                 char *rewrite_out,
-                                 size_t rewrite_out_size) {
-    return protocol_parse_text_with_prefix(line,
-                                           PROTOCOL_MSG_REWRITE "|",
-                                           rewrite_out,
-                                           rewrite_out_size);
 }
 
 bool protocol_parse_vote_target(const char *line, int *target_id_out) {

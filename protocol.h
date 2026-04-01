@@ -35,7 +35,6 @@ typedef enum {
     PROTOCOL_TYPE_REPLAY,
     PROTOCOL_TYPE_SUBMIT,
     PROTOCOL_TYPE_TITLE,
-    PROTOCOL_TYPE_REWRITE,
     PROTOCOL_TYPE_VOTE
 } protocol_message_type_t;
 
@@ -44,7 +43,6 @@ typedef enum {
 #define PROTOCOL_MSG_REPLAY "REPLAY"
 #define PROTOCOL_MSG_SUBMIT "SUBMIT"
 #define PROTOCOL_MSG_TITLE "TITLE"
-#define PROTOCOL_MSG_REWRITE "REWRITE"
 #define PROTOCOL_MSG_VOTE "VOTE"
 #define PROTOCOL_MSG_WELCOME "WELCOME"
 #define PROTOCOL_MSG_LOBBY_EVENT "LOBBY_EVENT"
@@ -66,7 +64,6 @@ typedef enum {
  * REPLAY|<y-or-n>\n
  * SUBMIT|<answer text>\n
  * TITLE|<title text>\n
- * REWRITE|<rewrite text>\n
  * VOTE|<option number>\n
  *
  * Server -> client
@@ -112,9 +109,6 @@ bool protocol_parse_title_prompt_fields(const char *line,
                                         size_t category_out_size,
                                         char *text_out,
                                         size_t text_out_size);
-bool protocol_parse_rewrite_text(const char *line,
-                                 char *rewrite_out,
-                                 size_t rewrite_out_size);
 bool protocol_parse_vote_target(const char *line, int *target_id_out);
 bool protocol_parse_vote_open_count(const char *line, int *option_count_out);
 bool protocol_parse_vote_rule_option(const char *line, int *option_number_out);
