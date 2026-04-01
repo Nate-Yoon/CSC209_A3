@@ -53,6 +53,8 @@ typedef struct {
     bool connected;
     bool joined;
     bool ready;
+    bool replay_decided;
+    bool wants_replay;
 } game_player_t;
 
 typedef struct {
@@ -66,6 +68,10 @@ void game_state_init(game_state_t *game);
 void game_state_reset(game_state_t *game);
 int game_count_joined_players(const game_state_t *game);
 int game_count_ready_players(const game_state_t *game);
+int game_count_connected_players(const game_state_t *game);
+int game_count_replay_players(const game_state_t *game);
+int game_count_possible_replay_players(const game_state_t *game);
+bool game_all_connected_players_want_replay(const game_state_t *game);
 bool game_can_start(const game_state_t *game);
 game_action_result_t game_handle_join(game_state_t *game,
                                       int player_id,
@@ -86,6 +92,10 @@ bool game_advance_phase_if_ready(game_state_t *game);
 bool game_finish_round(game_state_t *game);
 void game_end(game_state_t *game);
 void game_handle_disconnect(game_state_t *game, int player_id);
+game_action_result_t game_handle_replay_choice(game_state_t *game,
+                                               int player_id,
+                                               bool wants_replay);
+void game_prepare_replay(game_state_t *game);
 void game_start_prompt_window(game_state_t *game, time_t now);
 void game_start_title_window(game_state_t *game, time_t now);
 void game_start_vote_window(game_state_t *game, time_t now);

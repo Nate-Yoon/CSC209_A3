@@ -32,6 +32,8 @@ typedef struct {
     int player_id;
     bool joined;
     bool join_requested;
+    bool awaiting_replay_choice;
+    bool replay_choice_sent;
     bool ready_allowed;
     bool ready_sent;
     bool awaiting_submission;
@@ -39,6 +41,7 @@ typedef struct {
     bool awaiting_vote;
     bool prompt_line_active;
     int vote_option_count;
+    char username[PROTOCOL_MAX_USERNAME_LEN + 1];
     char title_category[PROTOCOL_MAX_CATEGORY_NAME_LEN + 1];
 } client_state_t;
 
@@ -47,6 +50,7 @@ static int client_connect(const char *host, const char *port_text);
 static int client_send_all(int fd, const char *buffer, size_t len);
 static int client_send_join(int fd, const char *username);
 static int client_send_ready(int fd);
+static int client_send_replay_choice(int fd, bool wants_replay);
 static int client_send_submission(int fd, const char *submission);
 static int client_send_title(int fd, const char *title_text);
 static int client_send_vote(int fd, int option_number);
@@ -59,6 +63,7 @@ static void client_print_lobby_roster_box(char *roster_text);
 static void client_print_join_prompt(void);
 static void client_print_username_prompt(void);
 static void client_print_ready_prompt(void);
+static void client_print_replay_prompt(void);
 static void client_print_answer_prompt(void);
 static void client_print_title_phase_intro(const client_state_t *state);
 static const char *client_title_input_prompt(const client_state_t *state);
@@ -151,6 +156,20 @@ static int client_send_ready(int fd) {
     return client_send_all(fd, ready_message, sizeof(ready_message) - 1);
 }
 
+static int client_send_replay_choice(int fd, bool wants_replay) {
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
+    int written;
+
+    written = snprintf(message, sizeof(message), "%s|%c\n",
+                       PROTOCOL_MSG_REPLAY,
+                       wants_replay ? 'y' : 'n');
+    if (written < 0 || (size_t)written >= sizeof(message)) {
+        return -1;
+    }
+
+    return client_send_all(fd, message, (size_t)written);
+}
+
 static int client_send_submission(int fd, const char *submission) {
     char message[PROTOCOL_LINE_BUFFER_SIZE];
     int written;
@@ -194,6 +213,8 @@ static void client_state_init(client_state_t *state) {
     state->player_id = 0;
     state->joined = false;
     state->join_requested = false;
+    state->awaiting_replay_choice = false;
+    state->replay_choice_sent = false;
     state->ready_allowed = false;
     state->ready_sent = false;
     state->awaiting_submission = false;
@@ -201,6 +222,7 @@ static void client_state_init(client_state_t *state) {
     state->awaiting_vote = false;
     state->prompt_line_active = false;
     state->vote_option_count = 0;
+    state->username[0] = '\0';
     strcpy(state->title_category, "generic");
 }
 
@@ -269,6 +291,12 @@ static void client_print_username_prompt(void) {
 static void client_print_ready_prompt(void) {
     client_print_separator();
     fputs("Type \"READY\" to signal that you are ready to start the game: ", stdout);
+    fflush(stdout);
+}
+
+static void client_print_replay_prompt(void) {
+    client_print_separator();
+    fputs("Would you like to play again (y/n) ", stdout);
     fflush(stdout);
 }
 
@@ -392,6 +420,8 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         client_break_prompt_line(state);
         state->joined = true;
         state->join_requested = false;
+        state->awaiting_replay_choice = false;
+        state->replay_choice_sent = false;
         state->ready_allowed = false;
         state->player_id = player_id;
         state->prompt_line_active = false;
@@ -476,6 +506,17 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         protocol_parse_game_event_text(line, text, sizeof(text))) {
         client_break_prompt_line(state);
         state->prompt_line_active = false;
+        if (strcmp(text, "Would you like to play again (y/n)") == 0) {
+            state->awaiting_submission = false;
+            state->awaiting_title = false;
+            state->awaiting_vote = false;
+            state->ready_allowed = false;
+            state->awaiting_replay_choice = true;
+            state->replay_choice_sent = false;
+            client_print_replay_prompt();
+            state->prompt_line_active = true;
+            return 0;
+        }
         puts(text);
         return 0;
     }
@@ -504,6 +545,9 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
             state->prompt_line_active = true;
         } else if (state->awaiting_vote) {
             client_print_vote_prompt(state);
+            state->prompt_line_active = true;
+        } else if (state->awaiting_replay_choice && !state->replay_choice_sent) {
+            client_print_replay_prompt();
             state->prompt_line_active = true;
         } else if (!state->ready_sent) {
             client_print_ready_prompt();
@@ -534,6 +578,9 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
             state->prompt_line_active = true;
         } else if (state->awaiting_vote) {
             client_print_vote_prompt(state);
+            state->prompt_line_active = true;
+        } else if (state->awaiting_replay_choice && !state->replay_choice_sent) {
+            client_print_replay_prompt();
             state->prompt_line_active = true;
         } else if (!state->ready_sent) {
             client_print_ready_prompt();
@@ -567,7 +614,33 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
             return 1;
         }
 
+        strncpy(state->username, line, sizeof(state->username) - 1);
+        state->username[sizeof(state->username) - 1] = '\0';
         puts("Joining lobby...");
+        state->prompt_line_active = false;
+        return 0;
+    }
+
+    if (state->awaiting_replay_choice && !state->replay_choice_sent) {
+        bool wants_replay;
+
+        if (strcmp(line, "y") != 0 && strcmp(line, "n") != 0) {
+            puts("Type \"y\" to play again or \"n\" to stop.");
+            client_print_replay_prompt();
+            state->prompt_line_active = true;
+            return 0;
+        }
+
+        wants_replay = strcmp(line, "y") == 0;
+        if (client_send_replay_choice(fd, wants_replay) != 0) {
+            perror("client: send");
+            return 1;
+        }
+
+        state->replay_choice_sent = true;
+        state->awaiting_replay_choice = false;
+        puts(wants_replay ? "Joined the play-again lobby. Waiting for others..." :
+                            "You chose not to play again.");
         state->prompt_line_active = false;
         return 0;
     }

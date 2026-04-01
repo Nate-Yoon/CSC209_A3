@@ -63,6 +63,9 @@ static int server_handle_join_line(server_state_t *server,
                                    const char *line);
 static int server_handle_ready_line(server_state_t *server,
                                     size_t client_index);
+static int server_handle_replay_line(server_state_t *server,
+                                     size_t client_index,
+                                     const char *line);
 static int server_handle_submit_line(server_state_t *server,
                                      size_t client_index,
                                      const char *line);
@@ -100,6 +103,7 @@ static void server_run_final_scoreboard_action(server_state_t *server,
                                                game_view_sink_t *view,
                                                time_t now);
 static void server_run_game_over_action(server_state_t *server);
+static void server_run_replay_start_action(server_state_t *server);
 static void server_pause_text_group(void);
 static void server_view_send_to_player(void *context,
                                        int player_id,
@@ -128,6 +132,10 @@ static int server_broadcast_lobby_event(server_state_t *server, const char *text
 static int server_broadcast_lobby_roster(server_state_t *server);
 static int server_broadcast_round_text(server_state_t *server, const char *text);
 static int server_broadcast_game_event(server_state_t *server, const char *text);
+static void server_cancel_replay_countdown(server_state_t *server);
+static void server_close_replay_lobby(server_state_t *server);
+static void server_maybe_schedule_replay(server_state_t *server);
+static void server_try_start_replay_game(server_state_t *server, bool force_start);
 static void server_seed_rng_once(void);
 static void server_print_usage(const char *program_name);
 static void server_ignore_sigpipe(void);
@@ -144,6 +152,7 @@ void server_state_init(server_state_t *server) {
     server->listen_fd = -1;
     server->next_player_id = 1;
     server->active_clients = 0;
+    server->shutdown_requested = false;
     server->pending_action_at = 0;
     server->pending_action = SERVER_PENDING_NONE;
     game_state_init(&server->game);
@@ -253,6 +262,10 @@ static int server_run_select_loop(server_state_t *server) {
         int any_ready;
         size_t i;
 
+        if (server->shutdown_requested) {
+            return EXIT_SUCCESS;
+        }
+
         FD_ZERO(&read_fds);
         FD_ZERO(&write_fds);
         FD_SET(server->listen_fd, &read_fds);
@@ -302,11 +315,17 @@ static int server_run_select_loop(server_state_t *server) {
         if (!any_ready) {
             server_run_pending_action_if_due(server);
             server_enforce_phase_deadline(server);
+            if (server->shutdown_requested) {
+                return EXIT_SUCCESS;
+            }
             continue;
         }
 
         if (FD_ISSET(server->listen_fd, &read_fds)) {
             server_accept_client(server);
+            if (server->shutdown_requested) {
+                return EXIT_SUCCESS;
+            }
         }
 
         for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
@@ -322,8 +341,16 @@ static int server_run_select_loop(server_state_t *server) {
                 continue;
             }
 
+            if (server->shutdown_requested) {
+                return EXIT_SUCCESS;
+            }
+
             if (FD_ISSET(server->clients[i].fd, &write_fds)) {
                 server_handle_client_writable(server, i);
+            }
+
+            if (server->shutdown_requested) {
+                return EXIT_SUCCESS;
             }
         }
     }
@@ -461,6 +488,19 @@ static void server_remove_client(server_state_t *server,
             return;
         }
 
+        if (phase_before_disconnect == GAME_PHASE_OVER) {
+            const game_player_t *player = game_get_player(&server->game, player_id);
+            char message[PROTOCOL_LINE_BUFFER_SIZE];
+
+            if (player != NULL && player->username[0] != '\0') {
+                snprintf(message, sizeof(message),
+                         "%s left the play-again lobby",
+                         player->username);
+                server_broadcast_lobby_event(server, message);
+            }
+            server_maybe_schedule_replay(server);
+        }
+
         if (game_advance_phase_if_ready(&server->game)) {
             server_handle_phase_change(server);
         }
@@ -564,6 +604,8 @@ static int server_handle_client_line(server_state_t *server,
             return server_handle_join_line(server, client_index, line);
         case PROTOCOL_TYPE_READY:
             return server_handle_ready_line(server, client_index);
+        case PROTOCOL_TYPE_REPLAY:
+            return server_handle_replay_line(server, client_index, line);
         case PROTOCOL_TYPE_SUBMIT:
             return server_handle_submit_line(server, client_index, line);
         case PROTOCOL_TYPE_TITLE:
@@ -707,6 +749,56 @@ static int server_handle_ready_line(server_state_t *server,
 
     fprintf(stderr, "server: slot %zu marked ready (%s)\n",
             client_index, player->username);
+    return 0;
+}
+
+static int server_handle_replay_line(server_state_t *server,
+                                     size_t client_index,
+                                     const char *line) {
+    server_client_t *client;
+    const game_player_t *player;
+    char message[PROTOCOL_LINE_BUFFER_SIZE];
+    bool wants_replay;
+    game_action_result_t result;
+
+    client = &server->clients[client_index];
+    if (!server_client_has_joined(client)) {
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|join first\n");
+    }
+
+    if (!protocol_parse_replay_choice(line, &wants_replay)) {
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|invalid replay choice\n");
+    }
+
+    result = game_handle_replay_choice(&server->game, client->player_id, wants_replay);
+    if (result != GAME_ACTION_OK) {
+        return server_send_to_client_slot(server,
+                                          client_index,
+                                          PROTOCOL_MSG_ERROR "|replay choice not allowed right now\n");
+    }
+
+    player = server_get_client_player(server, client_index);
+    if (player == NULL) {
+        return server_send_error_and_close(server, client_index, "server state error");
+    }
+
+    if (wants_replay) {
+        snprintf(message, sizeof(message),
+                 "%s joined the play-again lobby (%d/%d players)",
+                 player->username,
+                 game_count_replay_players(&server->game),
+                 game_count_connected_players(&server->game));
+    } else {
+        snprintf(message, sizeof(message),
+                 "%s left the play-again lobby",
+                 player->username);
+    }
+    server_broadcast_lobby_event(server, message);
+    server_maybe_schedule_replay(server);
     return 0;
 }
 
@@ -922,6 +1014,96 @@ static void server_maybe_start_game(server_state_t *server) {
             game_count_joined_players(&server->game));
 }
 
+static void server_cancel_replay_countdown(server_state_t *server) {
+    if (server == NULL) {
+        return;
+    }
+
+    if (server->pending_action == SERVER_PENDING_REPLAY_START) {
+        server->pending_action = SERVER_PENDING_NONE;
+        server->pending_action_at = 0;
+    }
+}
+
+static void server_close_replay_lobby(server_state_t *server) {
+    if (server == NULL) {
+        return;
+    }
+
+    server_cancel_replay_countdown(server);
+    server_broadcast_game_event(server,
+                                "There are not enough players to start the game, the lobby is closed.");
+    server->shutdown_requested = true;
+}
+
+static void server_try_start_replay_game(server_state_t *server, bool force_start) {
+    game_view_sink_t view;
+
+    if (server == NULL) {
+        return;
+    }
+
+    if (!force_start && game_count_replay_players(&server->game) < PROTOCOL_MIN_PLAYERS) {
+        return;
+    }
+
+    if (force_start && game_count_replay_players(&server->game) < PROTOCOL_MIN_PLAYERS) {
+        server_broadcast_game_event(server, "Not enough players joined to play again.");
+        return;
+    }
+
+    game_prepare_replay(&server->game);
+    if (!game_start(&server->game)) {
+        server_broadcast_game_event(server,
+                                    "game could not restart because question_prompts.txt could not be loaded");
+        fprintf(stderr, "server: replay game_start failed during prompt-bank setup\n");
+        return;
+    }
+
+    server_broadcast_game_event(server, "play-again lobby filled, restarting the game");
+    server_init_game_view(&view, server);
+    game_view_broadcast_round_intro(&server->game, &view);
+    server_schedule_pending_action(server,
+                                  SERVER_PENDING_QUESTION_PROMPT,
+                                  time(NULL) + SERVER_STAGE_HOLD_SECONDS);
+}
+
+static void server_maybe_schedule_replay(server_state_t *server) {
+    int replay_players;
+    int possible_replay_players;
+
+    if (server == NULL || server->game.phase != GAME_PHASE_OVER) {
+        return;
+    }
+
+    replay_players = game_count_replay_players(&server->game);
+    possible_replay_players = game_count_possible_replay_players(&server->game);
+    if (possible_replay_players < PROTOCOL_MIN_PLAYERS) {
+        server_close_replay_lobby(server);
+        return;
+    }
+
+    if (replay_players < PROTOCOL_MIN_PLAYERS) {
+        server_cancel_replay_countdown(server);
+        return;
+    }
+
+    if (game_all_connected_players_want_replay(&server->game)) {
+        server_cancel_replay_countdown(server);
+        server_try_start_replay_game(server, false);
+        return;
+    }
+
+    if (server->pending_action == SERVER_PENDING_REPLAY_START) {
+        return;
+    }
+
+    server_broadcast_game_event(server, "Enough players rejoined. Replay starts in 60 seconds unless everyone joins sooner.");
+    server_schedule_pending_action(server,
+                                  SERVER_PENDING_REPLAY_START,
+                                  time(NULL) + PROTOCOL_REPLAY_COUNTDOWN_SECONDS);
+}
+
 static bool server_get_select_timeout(const server_state_t *server,
                                       struct timeval *timeout_out) {
     time_t deadline;
@@ -1017,6 +1199,9 @@ static void server_run_pending_action_if_due(server_state_t *server) {
             break;
         case SERVER_PENDING_GAME_OVER:
             server_run_game_over_action(server);
+            break;
+        case SERVER_PENDING_REPLAY_START:
+            server_run_replay_start_action(server);
             break;
         case SERVER_PENDING_NONE:
             break;
@@ -1123,7 +1308,14 @@ static void server_run_final_scoreboard_action(server_state_t *server,
 static void server_run_game_over_action(server_state_t *server) {
     server->pending_action = SERVER_PENDING_NONE;
     server->pending_action_at = 0;
-    server_broadcast_game_event(server, "Thanks for playing.");
+    server_broadcast_game_event(server, "----------------------------------------------------------------");
+    server_broadcast_game_event(server, "Would you like to play again (y/n)");
+}
+
+static void server_run_replay_start_action(server_state_t *server) {
+    server->pending_action = SERVER_PENDING_NONE;
+    server->pending_action_at = 0;
+    server_try_start_replay_game(server, true);
 }
 
 static void server_handle_phase_change(server_state_t *server) {

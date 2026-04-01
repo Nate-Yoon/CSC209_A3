@@ -90,6 +90,87 @@ int game_count_ready_players(const game_state_t *game) {
     return count;
 }
 
+int game_count_connected_players(const game_state_t *game) {
+    int count;
+    size_t i;
+
+    if (game == NULL) {
+        return 0;
+    }
+
+    count = 0;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (game->players[i].connected) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+int game_count_replay_players(const game_state_t *game) {
+    int count;
+    size_t i;
+
+    if (game == NULL) {
+        return 0;
+    }
+
+    count = 0;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (game->players[i].connected && game->players[i].wants_replay) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+int game_count_possible_replay_players(const game_state_t *game) {
+    int count;
+    size_t i;
+
+    if (game == NULL) {
+        return 0;
+    }
+
+    count = 0;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (!game->players[i].connected) {
+            continue;
+        }
+
+        if (!game->players[i].replay_decided || game->players[i].wants_replay) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+bool game_all_connected_players_want_replay(const game_state_t *game) {
+    size_t i;
+    bool saw_connected_player;
+
+    if (game == NULL) {
+        return false;
+    }
+
+    saw_connected_player = false;
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        if (!game->players[i].connected) {
+            continue;
+        }
+
+        saw_connected_player = true;
+        if (!game->players[i].replay_decided || !game->players[i].wants_replay) {
+            return false;
+        }
+    }
+
+    return saw_connected_player;
+}
+
 bool game_can_start(const game_state_t *game) {
     int joined_players;
 
@@ -145,6 +226,8 @@ game_action_result_t game_handle_join(game_state_t *game,
     player->connected = true;
     player->joined = true;
     player->ready = false;
+    player->replay_decided = false;
+    player->wants_replay = false;
     return GAME_ACTION_OK;
 }
 
@@ -410,6 +493,29 @@ void game_end(game_state_t *game) {
     game->phase = GAME_PHASE_OVER;
 }
 
+game_action_result_t game_handle_replay_choice(game_state_t *game,
+                                               int player_id,
+                                               bool wants_replay) {
+    game_player_t *player;
+
+    if (game == NULL || player_id <= 0) {
+        return GAME_ACTION_INVALID_INPUT;
+    }
+
+    if (game->phase != GAME_PHASE_OVER) {
+        return GAME_ACTION_INVALID_STATE;
+    }
+
+    player = game_find_player(game, player_id);
+    if (player == NULL || !player->connected) {
+        return GAME_ACTION_UNKNOWN_PLAYER;
+    }
+
+    player->replay_decided = true;
+    player->wants_replay = wants_replay;
+    return GAME_ACTION_OK;
+}
+
 void game_handle_disconnect(game_state_t *game, int player_id) {
     int player_index;
     game_player_t *player;
@@ -431,6 +537,8 @@ void game_handle_disconnect(game_state_t *game, int player_id) {
 
     player->connected = false;
     player->ready = false;
+    player->replay_decided = false;
+    player->wants_replay = false;
     if (game->current_round.active) {
         round_set_player_active(&game->current_round, (size_t)player_index, false);
     }
@@ -438,6 +546,28 @@ void game_handle_disconnect(game_state_t *game, int player_id) {
     if (game->phase != GAME_PHASE_OVER &&
         game_count_joined_players(game) < PROTOCOL_MIN_PLAYERS) {
         game_end(game);
+    }
+}
+
+void game_prepare_replay(game_state_t *game) {
+    size_t i;
+
+    if (game == NULL) {
+        return;
+    }
+
+    game->phase = GAME_PHASE_LOBBY;
+    game->round_number = 0;
+    round_state_reset(&game->current_round);
+
+    for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
+        game_player_t *player = &game->players[i];
+
+        player->score = 0;
+        player->joined = player->connected && player->wants_replay;
+        player->ready = player->joined;
+        player->replay_decided = false;
+        player->wants_replay = false;
     }
 }
 
@@ -816,6 +946,8 @@ static void game_reset_player(game_player_t *player) {
     player->connected = false;
     player->joined = false;
     player->ready = false;
+    player->replay_decided = false;
+    player->wants_replay = false;
 }
 
 static round_category_t game_category_for_round_number(int round_number) {

@@ -22,6 +22,7 @@ enum {
     PROTOCOL_MAX_LINE_LEN = 128,
     PROTOCOL_MAX_PROMPT_LEN = PROTOCOL_MAX_LINE_LEN - 8,
     PROTOCOL_LINE_BUFFER_SIZE = PROTOCOL_MAX_LINE_LEN + 1,
+    PROTOCOL_REPLAY_COUNTDOWN_SECONDS = 60,
     PROTOCOL_SUBMISSION_TIMEOUT_SECONDS = 45,
     PROTOCOL_TITLE_TIMEOUT_SECONDS = 60,
     PROTOCOL_VOTE_TIMEOUT_SECONDS = 30
@@ -31,6 +32,7 @@ typedef enum {
     PROTOCOL_TYPE_UNKNOWN = 0,
     PROTOCOL_TYPE_JOIN,
     PROTOCOL_TYPE_READY,
+    PROTOCOL_TYPE_REPLAY,
     PROTOCOL_TYPE_SUBMIT,
     PROTOCOL_TYPE_TITLE,
     PROTOCOL_TYPE_REWRITE,
@@ -39,6 +41,7 @@ typedef enum {
 
 #define PROTOCOL_MSG_JOIN "JOIN"
 #define PROTOCOL_MSG_READY "READY"
+#define PROTOCOL_MSG_REPLAY "REPLAY"
 #define PROTOCOL_MSG_SUBMIT "SUBMIT"
 #define PROTOCOL_MSG_TITLE "TITLE"
 #define PROTOCOL_MSG_REWRITE "REWRITE"
@@ -60,6 +63,7 @@ typedef enum {
  * Client -> server
  * JOIN|<username>\n
  * READY\n
+ * REPLAY|<y-or-n>\n
  * SUBMIT|<answer text>\n
  * TITLE|<title text>\n
  * REWRITE|<rewrite text>\n
@@ -96,6 +100,7 @@ bool protocol_parse_lobby_event_text(const char *line,
 bool protocol_parse_lobby_roster(const char *line,
                                  char *roster_out,
                                  size_t roster_out_size);
+bool protocol_parse_replay_choice(const char *line, bool *wants_replay_out);
 bool protocol_parse_submit_text(const char *line,
                                 char *submission_out,
                                 size_t submission_out_size);
