@@ -619,6 +619,12 @@ static int server_handle_join_line(server_state_t *server,
                                                "game already started");
         }
 
+        if (result == GAME_ACTION_USERNAME_IN_USE) {
+            server_send_to_client(client,
+                                  PROTOCOL_MSG_ERROR "|username already in use\n");
+            return 0;
+        }
+
         server_send_to_client(client,
                               PROTOCOL_MSG_ERROR "|invalid username\n");
         return 0;
@@ -1256,7 +1262,7 @@ static int server_send_to_client(server_client_t *client, const char *message) {
     }
 
     message_len = strlen(message);
-    if (message_len > sizeof(client->output_buffer) - client->output_len) {
+    if (message_len + client->output_len >= sizeof(client->output_buffer)) {
         return -1;
     }
 
@@ -1301,14 +1307,29 @@ static int server_try_flush_output(server_client_t *client) {
 }
 
 static int server_send_transient_message(int fd, const char *message) {
-    size_t total_sent = 0;
+    size_t total_sent;
     size_t message_len;
+    int flags;
+    int result;
 
     if (fd < 0 || message == NULL) {
         return -1;
     }
 
+    flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return -1;
+    }
+
+    if ((flags & O_NONBLOCK) != 0) {
+        if (fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0) {
+            return -1;
+        }
+    }
+
+    total_sent = 0;
     message_len = strlen(message);
+    result = 0;
     while (total_sent < message_len) {
         ssize_t sent = send(fd,
                             message + total_sent,
@@ -1320,21 +1341,25 @@ static int server_send_transient_message(int fd, const char *message) {
                 continue;
             }
 
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
-            }
-
-            return -1;
+            result = -1;
+            break;
         }
 
         if (sent == 0) {
-            return -1;
+            result = -1;
+            break;
         }
 
         total_sent += (size_t)sent;
     }
 
-    return 0;
+    if ((flags & O_NONBLOCK) != 0) {
+        if (fcntl(fd, F_SETFL, flags) < 0) {
+            return -1;
+        }
+    }
+
+    return result;
 }
 
 static int server_send_to_client_slot(server_state_t *server,
@@ -1352,9 +1377,11 @@ static int server_send_error_and_close(server_state_t *server,
                                        size_t client_index,
                                        const char *reason) {
     char message[PROTOCOL_LINE_BUFFER_SIZE];
+    int fd;
 
-    if (protocol_format_error(message, sizeof(message), reason) >= 0) {
-        server_send_to_client(&server->clients[client_index], message);
+    fd = server->clients[client_index].fd;
+    if (protocol_format_error(message, sizeof(message), reason) >= 0 && fd >= 0) {
+        server_send_transient_message(fd, message);
     }
 
     server_remove_client(server, client_index, reason);
