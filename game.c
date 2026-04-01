@@ -857,38 +857,35 @@ static int game_get_reveal_owner_index_at(const game_state_t *game, size_t revea
 }
 
 static bool game_apply_round_scores(game_state_t *game) {
-    int reveal_index;
+    int winning_owner_index;
+    int winning_title_writer_index;
+    int runner_up_owner_index;
+    int runner_up_title_writer_index;
 
     if (game == NULL) {
         return false;
     }
 
-    for (reveal_index = 0;
-         reveal_index < round_get_reveal_count(&game->current_round);
-         reveal_index++) {
-        int owner_index =
-            round_get_reveal_owner_at(&game->current_round, (size_t)reveal_index);
-        int title_writer_index;
-        int vote_total;
+    if (!round_finalize_winner(&game->current_round)) {
+        return false;
+    }
 
-        if (owner_index < 0) {
-            continue;
-        }
+    winning_owner_index = round_get_winning_entry_index(&game->current_round);
+    winning_title_writer_index =
+        round_get_winning_title_writer_index(&game->current_round);
+    if (winning_owner_index < 0 || winning_title_writer_index < 0) {
+        return false;
+    }
 
-        vote_total = game->current_round.vote_totals[owner_index];
-        if (vote_total <= 0) {
-            continue;
-        }
+    game->players[winning_title_writer_index].score += GAME_FIRST_TITLE_POINTS;
+    game->players[winning_owner_index].score += GAME_FIRST_ANSWER_POINTS;
 
-        title_writer_index =
-            round_get_title_writer_for_submission_owner(&game->current_round,
-                                                        (size_t)owner_index);
-        if (title_writer_index < 0) {
-            return false;
-        }
-
-        game->players[title_writer_index].score += vote_total * GAME_VOTE_TITLE_POINTS;
-        game->players[owner_index].score += vote_total * GAME_VOTE_ANSWER_POINTS;
+    runner_up_owner_index = round_get_runner_up_entry_index(&game->current_round);
+    runner_up_title_writer_index =
+        round_get_runner_up_title_writer_index(&game->current_round);
+    if (runner_up_owner_index >= 0 && runner_up_title_writer_index >= 0) {
+        game->players[runner_up_title_writer_index].score += GAME_FIRST_TITLE_POINTS / 2;
+        game->players[runner_up_owner_index].score += GAME_FIRST_ANSWER_POINTS / 2;
     }
 
     return true;

@@ -32,6 +32,7 @@ typedef struct {
     int player_id;
     bool joined;
     bool join_requested;
+    bool ready_allowed;
     bool ready_sent;
     bool awaiting_submission;
     bool awaiting_title;
@@ -51,6 +52,10 @@ static int client_send_title(int fd, const char *title_text);
 static int client_send_vote(int fd, int option_number);
 static int client_run_loop(int fd);
 static void client_state_init(client_state_t *state);
+static void client_print_separator(void);
+static void client_print_welcome_banner(void);
+static void client_print_lobby_message(const char *text);
+static void client_print_lobby_roster_box(char *roster_text);
 static void client_print_join_prompt(void);
 static void client_print_username_prompt(void);
 static void client_print_ready_prompt(void);
@@ -189,6 +194,7 @@ static void client_state_init(client_state_t *state) {
     state->player_id = 0;
     state->joined = false;
     state->join_requested = false;
+    state->ready_allowed = false;
     state->ready_sent = false;
     state->awaiting_submission = false;
     state->awaiting_title = false;
@@ -198,22 +204,76 @@ static void client_state_init(client_state_t *state) {
     strcpy(state->title_category, "generic");
 }
 
+static void client_print_separator(void) {
+    puts("----------------------------------------------------------------");
+}
+
+static void client_print_welcome_banner(void) {
+    client_print_separator();
+    puts("Welcome to Survive the Internet");
+    client_print_separator();
+    puts("Survive the Internet is a social game built around funny writing,");
+    puts("unexpected twists, and group reactions. Each player gets chances");
+    puts("to answer prompts, respond to situations, and react to the");
+    puts("choices made by the other players.");
+    puts("");
+    puts("The fun comes from seeing ordinary answers turned into something");
+    puts("more dramatic, ridiculous, or embarrassing once they are shown");
+    puts("in a different context later in the round.");
+    puts("");
+    puts("This version is designed for 3 to 5 players.");
+    client_print_separator();
+}
+
+static void client_print_lobby_message(const char *text) {
+    client_print_separator();
+    puts(text);
+}
+
+static void client_print_lobby_roster_box(char *roster_text) {
+    char *username;
+    int slot_number;
+
+    if (roster_text == NULL) {
+        return;
+    }
+
+    puts("==============================================================");
+    puts("Players currently in the lobby:");
+    puts("==============================================================");
+
+    slot_number = 1;
+    username = strtok(roster_text, "|");
+    while (username != NULL) {
+        printf("%d. %s\n", slot_number, username);
+        slot_number++;
+        username = strtok(NULL, "|");
+    }
+
+    puts("==============================================================");
+}
+
 static void client_print_join_prompt(void) {
-    fputs("Welcome to Survive The Internet, type \"JOIN\" to join the game: ", stdout);
+    puts("Type \"JOIN\" to join the game.");
+    client_print_separator();
+    fputs("> ", stdout);
     fflush(stdout);
 }
 
 static void client_print_username_prompt(void) {
+    client_print_separator();
     fputs("Enter your alphanumeric username: ", stdout);
     fflush(stdout);
 }
 
 static void client_print_ready_prompt(void) {
+    client_print_separator();
     fputs("Type \"READY\" to signal that you are ready to start the game: ", stdout);
     fflush(stdout);
 }
 
 static void client_print_answer_prompt(void) {
+    client_print_separator();
     fputs("Answer: ", stdout);
     fflush(stdout);
 }
@@ -254,6 +314,7 @@ static const char *client_title_input_prompt(const client_state_t *state) {
 }
 
 static void client_print_title_prompt(const client_state_t *state) {
+    client_print_separator();
     fputs(client_title_input_prompt(state), stdout);
     fflush(stdout);
 }
@@ -263,6 +324,7 @@ static void client_print_vote_prompt(const client_state_t *state) {
         return;
     }
 
+    client_print_separator();
     printf("Vote for the funniest one by typing a number from 1 to %d: ",
            state->vote_option_count);
     fflush(stdout);
@@ -321,24 +383,43 @@ static int client_handle_socket_data(const char *chunk,
 }
 
 static int client_handle_server_line(const char *line, client_state_t *state) {
+    char roster[PROTOCOL_LINE_BUFFER_SIZE];
     char text[PROTOCOL_LINE_BUFFER_SIZE];
     char prompt[PROTOCOL_MAX_PROMPT_LEN + 1];
-    char username[PROTOCOL_MAX_USERNAME_LEN + 1];
-    char submission[PROTOCOL_MAX_SUBMISSION_LEN + 1];
     int player_id;
 
     if (protocol_parse_welcome_id(line, &player_id)) {
+        client_break_prompt_line(state);
         state->joined = true;
         state->join_requested = false;
+        state->ready_allowed = false;
         state->player_id = player_id;
         state->prompt_line_active = false;
-        puts("Joined the lobby.");
-        client_print_ready_prompt();
-        state->prompt_line_active = true;
+        client_print_lobby_message("Joined the lobby.");
+        return 0;
+    }
+
+    if (protocol_parse_lobby_event_text(line, text, sizeof(text))) {
+        client_break_prompt_line(state);
+        state->prompt_line_active = false;
+        client_print_lobby_message(text);
+        return 0;
+    }
+
+    if (protocol_parse_lobby_roster(line, roster, sizeof(roster))) {
+        client_break_prompt_line(state);
+        state->prompt_line_active = false;
+        client_print_lobby_roster_box(roster);
+        if (!state->ready_sent) {
+            state->ready_allowed = true;
+            client_print_ready_prompt();
+            state->prompt_line_active = true;
+        }
         return 0;
     }
 
     if (protocol_parse_prompt_text(line, prompt, sizeof(prompt))) {
+        state->ready_allowed = false;
         state->awaiting_submission = true;
         state->awaiting_title = false;
         state->awaiting_vote = false;
@@ -357,6 +438,7 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
                                           sizeof(state->title_category),
                                           prompt,
                                           sizeof(prompt))) {
+        state->ready_allowed = false;
         state->awaiting_submission = false;
         state->awaiting_title = true;
         state->awaiting_vote = false;
@@ -369,21 +451,8 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         return 0;
     }
 
-    if (protocol_parse_title_text(line, prompt, sizeof(prompt))) {
-        state->awaiting_submission = false;
-        state->awaiting_title = true;
-        state->awaiting_vote = false;
-        state->prompt_line_active = false;
-        state->vote_option_count = 0;
-        strcpy(state->title_category, "generic");
-        client_print_title_phase_intro(state);
-        puts(prompt);
-        client_print_title_prompt(state);
-        state->prompt_line_active = true;
-        return 0;
-    }
-
-    if (protocol_parse_vote_target(line, &player_id)) {
+    if (protocol_parse_vote_open_count(line, &player_id)) {
+        state->ready_allowed = false;
         state->awaiting_submission = false;
         state->awaiting_title = false;
         state->awaiting_vote = true;
@@ -395,13 +464,18 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         return 0;
     }
 
-    if (protocol_parse_info_text(line, text, sizeof(text))) {
+    if (protocol_parse_vote_rule_option(line, &player_id)) {
         client_break_prompt_line(state);
         state->prompt_line_active = false;
-        if (state->awaiting_vote) {
-            state->awaiting_vote = false;
-            state->vote_option_count = 0;
-        }
+        printf("You cannot vote for option %d because that is the title you wrote.\n",
+               player_id);
+        return 0;
+    }
+
+    if (protocol_parse_round_text(line, text, sizeof(text)) ||
+        protocol_parse_game_event_text(line, text, sizeof(text))) {
+        client_break_prompt_line(state);
+        state->prompt_line_active = false;
         puts(text);
         return 0;
     }
@@ -411,7 +485,16 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
         state->prompt_line_active = false;
         printf("Error: %s\n", text);
         if (!state->joined) {
-            client_print_username_prompt();
+            if (strcmp(text, "game already started") == 0 ||
+                strcmp(text, "lobby is full") == 0) {
+                return 0;
+            }
+
+            if (state->join_requested) {
+                client_print_username_prompt();
+            } else {
+                client_print_join_prompt();
+            }
             state->prompt_line_active = true;
         } else if (state->awaiting_submission) {
             client_print_answer_prompt();
@@ -426,32 +509,6 @@ static int client_handle_server_line(const char *line, client_state_t *state) {
             client_print_ready_prompt();
             state->prompt_line_active = true;
         }
-        return 0;
-    }
-
-    if (protocol_parse_result_fields(line,
-                                     username,
-                                     sizeof(username),
-                                     submission,
-                                     sizeof(submission))) {
-        client_break_prompt_line(state);
-        state->awaiting_submission = false;
-        state->awaiting_title = false;
-        state->awaiting_vote = false;
-        state->prompt_line_active = false;
-        state->vote_option_count = 0;
-        printf("%s posted: %s\n", username, submission);
-        return 0;
-    }
-
-    if (protocol_parse_winner_username(line, username, sizeof(username))) {
-        client_break_prompt_line(state);
-        state->awaiting_submission = false;
-        state->awaiting_title = false;
-        state->awaiting_vote = false;
-        state->prompt_line_active = false;
-        state->vote_option_count = 0;
-        printf("Round winner: %s\n", username);
         return 0;
     }
 
@@ -488,7 +545,6 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
     if (!state->joined) {
         if (!state->join_requested) {
             if (strcmp(line, "JOIN") != 0) {
-                puts("Type \"JOIN\" to enter the game.");
                 client_print_join_prompt();
                 return 0;
             }
@@ -582,6 +638,11 @@ static int client_handle_stdin_line(int fd, client_state_t *state, char *line) {
     }
 
     if (!state->ready_sent) {
+        if (!state->ready_allowed) {
+            client_print_lobby_message("Waiting for enough players to join before readying up.");
+            return 0;
+        }
+
         if (strcmp(line, "READY") != 0) {
             puts("Type \"READY\" when you want to mark yourself ready.");
             client_print_ready_prompt();
@@ -631,6 +692,7 @@ static int client_run_loop(int fd) {
     stdin_open = 1;
     client_state_init(&state);
 
+    client_print_welcome_banner();
     client_print_join_prompt();
 
     for (;;) {
