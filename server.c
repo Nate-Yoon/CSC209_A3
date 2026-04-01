@@ -1309,27 +1309,13 @@ static int server_try_flush_output(server_client_t *client) {
 static int server_send_transient_message(int fd, const char *message) {
     size_t total_sent;
     size_t message_len;
-    int flags;
-    int result;
 
     if (fd < 0 || message == NULL) {
         return -1;
     }
 
-    flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0) {
-        return -1;
-    }
-
-    if ((flags & O_NONBLOCK) != 0) {
-        if (fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0) {
-            return -1;
-        }
-    }
-
     total_sent = 0;
     message_len = strlen(message);
-    result = 0;
     while (total_sent < message_len) {
         ssize_t sent = send(fd,
                             message + total_sent,
@@ -1341,25 +1327,21 @@ static int server_send_transient_message(int fd, const char *message) {
                 continue;
             }
 
-            result = -1;
-            break;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            }
+
+            return -1;
         }
 
         if (sent == 0) {
-            result = -1;
-            break;
+            return -1;
         }
 
         total_sent += (size_t)sent;
     }
 
-    if ((flags & O_NONBLOCK) != 0) {
-        if (fcntl(fd, F_SETFL, flags) < 0) {
-            return -1;
-        }
-    }
-
-    return result;
+    return 0;
 }
 
 static int server_send_to_client_slot(server_state_t *server,
