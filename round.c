@@ -72,12 +72,6 @@ void round_state_reset(round_state_t *round) {
     round->submission_deadline = 0;
     round->rewrite_deadline = 0;
     round->voting_deadline = 0;
-    round->winning_entry_index = ROUND_NO_ENTRY;
-    round->winning_title_writer_index = ROUND_NO_TARGET;
-    round->winning_vote_total = 0;
-    round->runner_up_entry_index = ROUND_NO_ENTRY;
-    round->runner_up_title_writer_index = ROUND_NO_TARGET;
-    round->runner_up_vote_total = 0;
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         round->reveal_order[i] = ROUND_NO_ENTRY;
@@ -406,12 +400,6 @@ bool round_prepare_voting(round_state_t *round) {
 
     round->reveal_count = active_count;
     round->vote_count = 0;
-    round->winning_entry_index = ROUND_NO_ENTRY;
-    round->winning_title_writer_index = ROUND_NO_TARGET;
-    round->winning_vote_total = 0;
-    round->runner_up_entry_index = ROUND_NO_ENTRY;
-    round->runner_up_title_writer_index = ROUND_NO_TARGET;
-    round->runner_up_vote_total = 0;
 
     for (i = 0; i < PROTOCOL_MAX_PLAYERS; i++) {
         round->reveal_order[i] = ROUND_NO_ENTRY;
@@ -561,6 +549,15 @@ int round_get_reveal_owner_at(const round_state_t *round, size_t reveal_index) {
     return round->reveal_order[reveal_index];
 }
 
+int round_get_vote_total_for_submission_owner(const round_state_t *round,
+                                              size_t player_index) {
+    if (round == NULL || player_index >= PROTOCOL_MAX_PLAYERS) {
+        return 0;
+    }
+
+    return round->vote_totals[player_index];
+}
+
 const char *round_get_player_prompt(const round_state_t *round, size_t player_index) {
     if (round == NULL || player_index >= PROTOCOL_MAX_PLAYERS) {
         return NULL;
@@ -608,130 +605,6 @@ const char *round_get_title_for_submission_owner(const round_state_t *round,
     }
 
     return round->players[title_writer_index].rewrite_text;
-}
-
-bool round_finalize_winner(round_state_t *round) {
-    int best_targets[PROTOCOL_MAX_PLAYERS];
-    int runner_up_targets[PROTOCOL_MAX_PLAYERS];
-    int best_count;
-    int best_vote_total;
-    int runner_up_count;
-    int runner_up_vote_total;
-    int i;
-
-    if (round == NULL || !round->active || round->reveal_count <= 0) {
-        return false;
-    }
-
-    best_count = 0;
-    best_vote_total = -1;
-    runner_up_count = 0;
-    runner_up_vote_total = -1;
-    for (i = 0; i < round->reveal_count; i++) {
-        int owner_index = round->reveal_order[i];
-        int owner_votes;
-
-        if (owner_index < 0) {
-            continue;
-        }
-
-        owner_votes = round->vote_totals[owner_index];
-        if (owner_votes > best_vote_total) {
-            best_vote_total = owner_votes;
-            best_targets[0] = owner_index;
-            best_count = 1;
-        } else if (owner_votes == best_vote_total) {
-            best_targets[best_count] = owner_index;
-            best_count++;
-        }
-    }
-
-    if (best_count <= 0) {
-        return false;
-    }
-
-    round->winning_entry_index = best_targets[rand() % best_count];
-    round->winning_title_writer_index =
-        round_get_title_writer_for_submission_owner(round,
-                                                    (size_t)round->winning_entry_index);
-    round->winning_vote_total = best_vote_total;
-
-    for (i = 0; i < round->reveal_count; i++) {
-        int owner_index = round->reveal_order[i];
-        int owner_votes;
-
-        if (owner_index < 0 || owner_index == round->winning_entry_index) {
-            continue;
-        }
-
-        owner_votes = round->vote_totals[owner_index];
-        if (owner_votes > runner_up_vote_total) {
-            runner_up_vote_total = owner_votes;
-            runner_up_targets[0] = owner_index;
-            runner_up_count = 1;
-        } else if (owner_votes == runner_up_vote_total) {
-            runner_up_targets[runner_up_count] = owner_index;
-            runner_up_count++;
-        }
-    }
-
-    if (runner_up_count > 0) {
-        round->runner_up_entry_index = runner_up_targets[rand() % runner_up_count];
-        round->runner_up_title_writer_index =
-            round_get_title_writer_for_submission_owner(round,
-                                                        (size_t)round->runner_up_entry_index);
-        round->runner_up_vote_total = runner_up_vote_total;
-    }
-
-    return round->winning_title_writer_index >= 0;
-}
-
-int round_get_winning_entry_index(const round_state_t *round) {
-    if (round == NULL) {
-        return ROUND_NO_ENTRY;
-    }
-
-    return round->winning_entry_index;
-}
-
-int round_get_winning_title_writer_index(const round_state_t *round) {
-    if (round == NULL) {
-        return ROUND_NO_TARGET;
-    }
-
-    return round->winning_title_writer_index;
-}
-
-int round_get_winning_vote_total(const round_state_t *round) {
-    if (round == NULL) {
-        return 0;
-    }
-
-    return round->winning_vote_total;
-}
-
-int round_get_runner_up_entry_index(const round_state_t *round) {
-    if (round == NULL) {
-        return ROUND_NO_ENTRY;
-    }
-
-    return round->runner_up_entry_index;
-}
-
-int round_get_runner_up_title_writer_index(const round_state_t *round) {
-    if (round == NULL) {
-        return ROUND_NO_TARGET;
-    }
-
-    return round->runner_up_title_writer_index;
-}
-
-int round_get_runner_up_vote_total(const round_state_t *round) {
-    if (round == NULL) {
-        return 0;
-    }
-
-    return round->runner_up_vote_total;
 }
 
 bool round_all_submitted(const round_state_t *round) {
